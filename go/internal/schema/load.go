@@ -11,10 +11,17 @@ import (
 	"github.com/valkdb/postgresparser"
 )
 
-// LoadFromDir reads all *.sql files from dir, parses CREATE TABLE statements,
-// and returns the desired schema as a map keyed by "schema_name.table_name".
+// LoadResult holds the result of LoadFromDir (tables and indexes).
+type LoadResult struct {
+	Tables  map[string]*Table  // key: schema.tablename
+	Indexes map[string]*Index  // key: schema.indexname
+}
+
+// LoadFromDir reads all *.sql files from dir, parses CREATE TABLE and CREATE INDEX statements,
+// and returns the desired schema (tables with optional PK/UNIQUE/FK, and indexes).
+// Indexes must use CREATE INDEX CONCURRENTLY or loading fails (for large-table safety).
 // Comments are retained in the source for future directive parsing.
-func LoadFromDir(dir string) (map[string]*Table, error) {
+func LoadFromDir(dir string) (*LoadResult, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("read schema dir: %w", err)
@@ -31,26 +38,31 @@ func LoadFromDir(dir string) (map[string]*Table, error) {
 	}
 	sort.Strings(sqlFiles)
 
-	desired := make(map[string]*Table)
+	tables := make(map[string]*Table)
+	indexes := make(map[string]*Index)
 
 	for _, path := range sqlFiles {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		tables, err := parseDDL(string(body))
+		tbls, idxs, err := parseDDL(string(body))
 		if err != nil {
 			// File may contain only comments (e.g. -- DROP TABLE ... directive); treat as 0 tables.
 			// TODO: detect specific error, so syntax errors are still reported.
 			continue
 		}
-		for _, t := range tables {
+		for _, t := range tbls {
 			key := tableKey(t.Schema, t.Name)
-			desired[key] = t
+			tables[key] = t
+		}
+		for _, idx := range idxs {
+			key := indexKey(idx.Schema, idx.Name)
+			indexes[key] = idx
 		}
 	}
 
-	return desired, nil
+	return &LoadResult{Tables: tables, Indexes: indexes}, nil
 }
 
 // LoadAllowDropTableDefs reads all *.sql files in dir, finds "-- DROP TABLE schema.tablename ("
@@ -119,11 +131,11 @@ func extractDropTableBlockDefs(rawSQL string) map[string]*Table {
 			sb.WriteString("\n")
 		}
 		createSQL := strings.Replace(sb.String(), "DROP TABLE", "CREATE TABLE", 1)
-		tables, err := parseDDL(createSQL)
-		if err != nil || len(tables) == 0 {
+		tbls, _, err := parseDDL(createSQL)
+		if err != nil || len(tbls) == 0 {
 			continue
 		}
-		t := tables[0]
+		t := tbls[0]
 		key := tableKey(t.Schema, t.Name)
 		out[key] = t
 		i = end
@@ -136,6 +148,18 @@ func tableKey(schema, name string) string {
 		schema = "public"
 	}
 	return schema + "." + name
+}
+
+// IndexKey returns the map key for an index (schema.indexname).
+func IndexKey(schema, indexName string) string {
+	if schema == "" {
+		schema = "public"
+	}
+	return schema + "." + indexName
+}
+
+func indexKey(schema, name string) string {
+	return IndexKey(schema, name)
 }
 
 // removedDirectiveRE matches "-- removed: colname type" or "-- removed: colname ANY_TYPE"
@@ -170,43 +194,113 @@ func extractRemovedDirectives(rawSQL string) []AllowDropColumn {
 	return out
 }
 
-func parseDDL(sql string) ([]*Table, error) {
+func parseDDL(sql string) ([]*Table, []*Index, error) {
 	batch, err := postgresparser.ParseSQLAll(sql)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var out []*Table
+	var tables []*Table
+	var indexes []*Index
 	for _, stmt := range batch.Statements {
 		if stmt.Query == nil {
 			continue
 		}
 		allowDrops := extractRemovedDirectives(stmt.RawSQL)
 		for _, action := range stmt.Query.DDLActions {
-			if action.Type != postgresparser.DDLCreateTable {
-				continue
-			}
-			t := &Table{
-				Schema:           action.Schema,
-				Name:             action.ObjectName,
-				Columns:          make([]Column, 0, len(action.ColumnDetails)),
-				AllowDropColumns: allowDrops,
-			}
-			if t.Schema == "" {
-				t.Schema = "public"
-			}
-			for _, c := range action.ColumnDetails {
-				t.Columns = append(t.Columns, Column{
-					Name:     c.Name,
-					Type:     normalizeType(c.Type),
-					Nullable: c.Nullable,
-					Default:  c.Default,
+			switch action.Type {
+			case postgresparser.DDLCreateTable:
+				t := &Table{
+					Schema:           action.Schema,
+					Name:             action.ObjectName,
+					Columns:          make([]Column, 0, len(action.ColumnDetails)),
+					AllowDropColumns: allowDrops,
+				}
+				if t.Schema == "" {
+					t.Schema = "public"
+				}
+				for _, c := range action.ColumnDetails {
+					t.Columns = append(t.Columns, Column{
+						Name:     c.Name,
+						Type:     normalizeType(c.Type),
+						Nullable: c.Nullable,
+						Default:  c.Default,
+					})
+				}
+				if action.Constraints != nil {
+					if action.Constraints.PrimaryKey != nil {
+						t.PrimaryKey = &PrimaryKeyConstraint{
+							Name:    action.Constraints.PrimaryKey.ConstraintName,
+							Columns: append([]string(nil), action.Constraints.PrimaryKey.Columns...),
+						}
+					}
+					for _, u := range action.Constraints.UniqueKeys {
+						t.UniqueKeys = append(t.UniqueKeys, UniqueConstraint{
+							Name:    u.ConstraintName,
+							Columns: append([]string(nil), u.Columns...),
+						})
+					}
+					for _, fk := range action.Constraints.ForeignKeys {
+						t.ForeignKeys = append(t.ForeignKeys, ForeignKey{
+							Name:              fk.ConstraintName,
+							Columns:           append([]string(nil), fk.Columns...),
+							ReferencesSchema:  fk.ReferencesSchema,
+							ReferencesTable:   fk.ReferencesTable,
+							ReferencesColumns: append([]string(nil), fk.ReferencesColumns...),
+							OnDelete:          string(fk.OnDelete),
+							OnUpdate:          string(fk.OnUpdate),
+						})
+					}
+				}
+				tables = append(tables, t)
+			case postgresparser.DDLCreateIndex:
+				// Table is in the same statement's Tables.
+				if len(stmt.Query.Tables) == 0 {
+					continue
+				}
+				tbl := stmt.Query.Tables[0]
+				idxSchema := action.Schema
+				if idxSchema == "" {
+					idxSchema = tbl.Schema
+				}
+				if idxSchema == "" {
+					idxSchema = "public"
+				}
+				concurrent := false
+				for _, f := range action.Flags {
+					if f == "CONCURRENTLY" {
+						concurrent = true
+						break
+					}
+				}
+				if !concurrent {
+					return nil, nil, fmt.Errorf("CREATE INDEX %s.%s must use CONCURRENTLY (required for large-table safety)", idxSchema, action.ObjectName)
+				}
+				idxType := action.IndexType
+				if idxType == "" {
+					idxType = "btree"
+				}
+				unique := false
+				for _, f := range action.Flags {
+					if f == "UNIQUE" {
+						unique = true
+						break
+					}
+				}
+				indexes = append(indexes, &Index{
+					Name:          action.ObjectName,
+					Schema:        idxSchema,
+					TableSchema:   tbl.Schema,
+					TableName:     tbl.Name,
+					Columns:       append([]string(nil), action.Columns...),
+					Unique:        unique,
+					IndexType:     idxType,
+					Concurrently:  true,
 				})
 			}
-			out = append(out, t)
 		}
 	}
-	return out, nil
+	return tables, indexes, nil
 }
 
 // normalizeType canonicalizes PostgreSQL type names for comparison with information_schema.

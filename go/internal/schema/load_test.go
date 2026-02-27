@@ -3,6 +3,7 @@ package schema
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,10 +16,10 @@ func TestLoadFromDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 tables, got %d", len(got))
+	if len(got.Tables) != 2 {
+		t.Fatalf("expected 2 tables, got %d", len(got.Tables))
 	}
-	users, ok := got["public.users"]
+	users, ok := got.Tables["public.users"]
 	if !ok {
 		t.Fatal("missing public.users")
 	}
@@ -28,7 +29,7 @@ func TestLoadFromDir(t *testing.T) {
 	if len(users.Columns) != 2 {
 		t.Fatalf("users: expected 2 columns, got %d", len(users.Columns))
 	}
-	events, ok := got["public.events"]
+	events, ok := got.Tables["public.events"]
 	if !ok {
 		t.Fatal("missing public.events")
 	}
@@ -46,12 +47,15 @@ func writeFile(t *testing.T, dir, name, content string) {
 
 func TestParseDDL_SingleTable(t *testing.T) {
 	sql := `CREATE TABLE public.foo (id integer, name character varying(100));`
-	tables, err := parseDDL(sql)
+	tables, indexes, err := parseDDL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(tables) != 1 {
 		t.Fatalf("expected 1 table, got %d", len(tables))
+	}
+	if len(indexes) != 0 {
+		t.Fatalf("expected 0 indexes, got %d", len(indexes))
 	}
 	tbl := tables[0]
 	if tbl.Schema != "public" || tbl.Name != "foo" {
@@ -81,8 +85,8 @@ func TestLoadFromDir_EmptyDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 0 {
-		t.Errorf("expected 0 tables, got %d", len(got))
+	if len(got.Tables) != 0 {
+		t.Errorf("expected 0 tables, got %d", len(got.Tables))
 	}
 }
 
@@ -93,7 +97,7 @@ func TestParseDDL_RemovedDirective(t *testing.T) {
     -- removed: passwordhash character varying(64)
 );
 `
-	tables, err := parseDDL(sql)
+	tables, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +119,7 @@ func TestParseDDL_RemovedDirectiveAnyType(t *testing.T) {
     -- removed: bar ANY_TYPE
 );
 `
-	tables, err := parseDDL(sql)
+	tables, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,11 +166,52 @@ func TestLoadFromDir_CommentOnlyFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("expected 1 table (bar), got %d", len(got))
+	if len(got.Tables) != 1 {
+		t.Fatalf("expected 1 table (bar), got %d", len(got.Tables))
 	}
-	if _, ok := got["public.bar"]; !ok {
-		t.Errorf("missing public.bar, got %v", got)
+	if _, ok := got.Tables["public.bar"]; !ok {
+		t.Errorf("missing public.bar, got %v", got.Tables)
+	}
+}
+
+// TestParseDDL_CreateIndexConcurrently verifies that CREATE INDEX CONCURRENTLY is parsed and CONCURRENTLY is required.
+func TestParseDDL_CreateIndexConcurrently(t *testing.T) {
+	sql := `CREATE TABLE public.users (id integer, username character varying(255));
+CREATE INDEX CONCURRENTLY idx_users_username ON public.users (username);`
+	tables, indexes, err := parseDDL(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tables) != 1 {
+		t.Fatalf("expected 1 table, got %d", len(tables))
+	}
+	if len(indexes) != 1 {
+		t.Fatalf("expected 1 index, got %d", len(indexes))
+	}
+	idx := indexes[0]
+	if idx.Name != "idx_users_username" || idx.Schema != "public" {
+		t.Errorf("index: name=%q schema=%q", idx.Name, idx.Schema)
+	}
+	if idx.TableName != "users" || idx.TableSchema != "public" {
+		t.Errorf("index table: %s.%s", idx.TableSchema, idx.TableName)
+	}
+	if len(idx.Columns) != 1 || idx.Columns[0] != "username" {
+		t.Errorf("index columns: %v", idx.Columns)
+	}
+	if !idx.Concurrently {
+		t.Error("index must have Concurrently=true")
+	}
+}
+
+// TestParseDDL_CreateIndexWithoutConcurrentlyFails verifies that CREATE INDEX without CONCURRENTLY returns an error.
+func TestParseDDL_CreateIndexWithoutConcurrentlyFails(t *testing.T) {
+	sql := `CREATE INDEX idx_users_username ON public.users (username);`
+	_, _, err := parseDDL(sql)
+	if err == nil {
+		t.Fatal("expected error when CREATE INDEX does not use CONCURRENTLY")
+	}
+	if !strings.Contains(err.Error(), "CONCURRENTLY") {
+		t.Errorf("error should mention CONCURRENTLY: %v", err)
 	}
 }
 

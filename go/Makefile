@@ -54,3 +54,6 @@ apply-v04-override-fail: docker-up build
 
 apply-v04-override: docker-up build 
 	./bin/schemify -s ./schemas/demo-v04-destructive-tbl-override -v
+
+apply-v05: docker-up build 
+	./bin/schemify -s ./schemas/demo-v05 -v
