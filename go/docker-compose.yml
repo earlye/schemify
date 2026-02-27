@@ -1,0 +1,54 @@
+version: '3.8'
+
+volumes:
+  pg-data:
+
+services:
+  postgres:
+    image: postgres:18
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql
+    environment:
+      POSTGRES_USER: schemify
+      POSTGRES_PASSWORD: schemify
+      POSTGRES_DB: schemify
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bifrost} -d ${POSTGRES_DB:-bifrost}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  psql:
+    profiles:
+      - psql
+    image: postgres:18
+    environment:
+      PGUSER: schemify
+      PGPASSWORD: schemify
+      PGDATABASE: schemify
+    command: ["psql", "-h", "postgres"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dev:
+    build: .
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      DB_HOST: pgsql-dev
+      DB_PORT: "5432"
+      DB_USER: schemify
+      DB_PASSWORD: schemify
+      DB_NAME: schemify
+      SCHEMA_DIR: /app/demo/schema-v01
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["/app/schemify", "-s", "/app/demo/schema-v01", "-v"]
+    profiles:
+      - run

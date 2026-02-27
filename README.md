@@ -1,62 +1,63 @@
 # Schemify
 
-Schemify is a POC tool for applying schema declarations to a database.
-This is slightly different from applying _migrations_, like flyway,
-node-db-migrate, and most other schema migration tools. Migrations are
-effectively _deltas_, and in other systems all such deltas from the
-original schema are stored and applied.
+Schemify applies a **declarative** SQL schema to a PostgreSQL database. You define the desired state in `CREATE TABLE` (and related DDL) in `.sql` files; Schemify compares that to the live database, computes the minimal set of changes, and applies only **additive** changes (new tables, new columns). It **refuses** to apply destructive changes (dropping tables or columns) and exits with an error instead.
 
-This is a problem because it spreads out the _declaration_ of the
-database in an unintuitive way.
+This is different from migration-based tools (Flyway, golang-migrate, etc.): you maintain the desired schema as source of truth, not a history of deltas.
 
-A _declaration_ is a description of the desired state of the database
-schema. Schemify compares the declarations against the database,
-builds the smallest _migration_ to get from the current state to the
-desired state, and optionally applies those migrations.
+## Implementations
 
-# Current State
+- **[go/](go/)** — Go implementation (CLI and library). Recommended.
 
-Schemify is barely a proof of concept; it compares table declarations
-against an existing schema and can add tables or columns to tables. It
-doesn't yet understand simple things like indexes and certainly not
-complicated things like functions, custom types, or triggers. In
-principle these things are just extensions of what's already present,
-but it seems likely there will be some refactoring involved should we
-decide to move ahead with this.
+## Quick start (Go)
 
-# Installation
+From the `go/` directory:
 
-Once this is getting built and deployed by a CI system, you should
-be able to install it via:
-
-```
-pip install schemify
+```bash
+cd go
+make build
+# Start Postgres 18 (Docker)
+make docker-up
+# Apply schema (or use -n for dry-run)
+./schemify -s ./demo/schema-v01 -v
 ```
 
-You can install from source by running:
+Connection defaults: `localhost:5432`, user `schemify`, password `schemify`, database `schemify`. Override with flags (`-H`, `-p`, `-U`, `-P`, `-d`) or env (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`). Schema directory: `-s` or `SCHEMA_DIR`.
 
-```
-./setup pytest test
-./setup install
-```
+## Schema format
 
-# Use
+Put one or more `.sql` files in a directory. Each file can contain `CREATE TABLE` statements:
 
-Run schemify to install a given schema:
-
-```
-schemify -H {db-host} -p {db-port} -U {db-user} -P {db-password} -d {db-database} \
-         -v -s {schema-directory}
+```sql
+CREATE TABLE public.users (
+    id integer,
+    username character varying(255)
+);
 ```
 
-# Productizing Notes:
+Schemify will create missing tables and add missing columns. If the database has tables or columns that are **not** in your desired schema, it will **not** drop them; it will exit with a non-zero status and list the destructive changes that would be required.
 
-1. CI needs to build and deploy this to pypi.
-2. Need to support functions, custom types, triggers, and renaming
-   of :allthethings:.
-3. A decision should be made whether the declarations should continue
-   to be yaml files, or whether an investment should be made in
-   parsing SQL so they can more naturally be written as `CREATE
-   TABLE...` statements. It's important to note that SQL doesn't have
-   a native way to express that a schema entity used to have a different
-   name.
+## Using as a library
+
+```go
+import "github.com/earlye/schemify/schemify"
+
+cfg := &schemify.Config{
+    Host:      "localhost",
+    Port:      "5432",
+    User:      "myuser",
+    Password:  "mypass",
+    Database:  "mydb",
+    SchemaDir: "./schema",
+}
+sql, err := schemify.Run(ctx, cfg, schemify.ApplyOptions{Verbose: true})
+// Or: load schema, introspect, diff, and apply in separate steps via
+// schemify.LoadSchema, schemify.Introspect, schemify.Diff, schemify.Apply.
+```
+
+## Docker and Postgres 18
+
+The Go app uses Postgres 18 in Docker. The data volume must be mounted at **`/var/lib/postgresql`** (not `/var/lib/postgresql/data`), because Postgres 18 creates a versioned subdirectory (e.g. `18/data`) under that path. See [go/docker-compose.yml](go/docker-compose.yml).
+
+## License
+
+MIT. Original work Copyright (c) 2018 Earnest; derivative work and maintenance Copyright (c) 2025 earlye.
