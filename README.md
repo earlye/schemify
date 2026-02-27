@@ -60,4 +60,4 @@ The Go app uses Postgres 18 in Docker. The data volume must be mounted at **`/va
 
 ## License
 
-MIT. Original work Copyright (c) 2018 Earnest; derivative work and maintenance Copyright (c) 2025 earlye.
+MIT. Original work Copyright (c) 2018 Earnest; derivative work and maintenance Copyright (c) 2026 earlye.
