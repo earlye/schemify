@@ -75,6 +75,10 @@ func migrationSQL(m diff.Migration) (string, error) {
 		return createTableSQL(m.TableDef), nil
 	case "add_column":
 		return addColumnSQL(m.Schema, m.Table, m.Column), nil
+	case "drop_column":
+		return dropColumnSQL(m.Schema, m.Table, m.Column.Name), nil
+	case "drop_table":
+		return dropTableSQL(m.Schema, m.Table), nil
 	default:
 		return "", fmt.Errorf("unknown migration kind: %s", m.Kind)
 	}
@@ -91,6 +95,14 @@ func createTableSQL(t *schema.Table) string {
 
 func addColumnSQL(schema, table string, c *schema.Column) string {
 	return fmt.Sprintf("ALTER TABLE %s.%s ADD COLUMN %s", schema, table, columnDef(c))
+}
+
+func dropColumnSQL(schema, table, columnName string) string {
+	return fmt.Sprintf("ALTER TABLE %s.%s DROP COLUMN %s", schema, table, columnName)
+}
+
+func dropTableSQL(schema, table string) string {
+	return fmt.Sprintf("DROP TABLE %s.%s", schema, table)
 }
 
 func columnDef(c *schema.Column) string {

@@ -1,0 +1,9 @@
+-- Note: override destructive drop table.
+-- This comment is not part of the command.
+-- The following 4-line comment is the directive.
+-- It is a comment that starts with DROP TABLE and is followed by what would have been a CREATE TABLE.
+--
+-- DROP TABLE public.events (
+--     id integer,
+--     event character varying(255),
+-- );

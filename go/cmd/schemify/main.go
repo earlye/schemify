@@ -42,7 +42,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&user, "user", "U", envOrDefault("DB_USER", "schemify"), "database user")
 	rootCmd.PersistentFlags().StringVarP(&password, "password", "P", envOrDefault("DB_PASSWORD", "schemify"), "database password")
 	rootCmd.PersistentFlags().StringVarP(&database, "database", "d", envOrDefault("DB_NAME", "schemify"), "database name")
-	rootCmd.PersistentFlags().StringVarP(&schemaDir, "schema", "s", envOrDefault("SCHEMA_DIR", "./demo/schema-v01"), "directory containing *.sql schema files")
+	rootCmd.PersistentFlags().StringVarP(&schemaDir, "schema", "s", envOrDefault("SCHEMA_DIR", "./schemas/demo-v01"), "directory containing *.sql schema files")
 	rootCmd.PersistentFlags().BoolVarP(&dryRun, "dry-run", "n", false, "print SQL only, do not apply")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 }
