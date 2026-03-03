@@ -144,13 +144,13 @@ func IndexMatches(actual, desired *schema.Index) bool {
 // a table in actual but not desired is dropped only if its key is in the map and TablesMatchForDrop(actual, expected).
 // desiredIndexes/actualIndexes can be nil (no index diff). Index in actual but not in desired -> destructive drop_index.
 // Returns additive migrations to apply and any destructive changes (which must not be applied).
-func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexes map[string]*schema.Index, allowDropTableDefs map[string]*schema.Table) (additive []Migration, destructive []DestructiveChange) {
+func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexes map[string]*schema.Index, allowDropTableDefs map[string]*schema.Table) (migrations []Migration, disallowed []DestructiveChange) {
 	// Tables in actual but not in desired -> drop table (migration if allowed and columns match, else destructive)
 	for key, t := range actual {
 		if desired[key] == nil {
 			expected := allowDropTableDefs[key]
 			if expected != nil && TablesMatchForDrop(t, expected) {
-				additive = append(additive, Migration{
+				migrations = append(migrations, Migration{
 					Kind:   "drop_table",
 					Schema: t.Schema,
 					Table:  t.Name,
@@ -164,7 +164,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 				if expected != nil {
 					dc.Detail = describeColumnDrift(t, expected)
 				}
-				destructive = append(destructive, dc)
+				disallowed = append(disallowed, dc)
 			}
 		}
 	}
@@ -173,7 +173,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 	for key, want := range desired {
 		have := actual[key]
 		if have == nil {
-			additive = append(additive, Migration{
+			migrations = append(migrations, Migration{
 				Kind:     "create_table",
 				Schema:   want.Schema,
 				Table:    want.Name,
@@ -194,7 +194,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 			if !wantCols[c.Name] {
 				allow, ok := allowDropByCol[c.Name]
 				if !ok {
-					destructive = append(destructive, DestructiveChange{
+					disallowed = append(disallowed, DestructiveChange{
 						Kind:   "drop_column",
 						Schema: want.Schema,
 						Table:  want.Name,
@@ -205,7 +205,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 				// Allowed only if type matches exactly or directive is ANY_TYPE
 				actualType := c.Type
 				if allow.Type != "ANY_TYPE" && allow.Type != actualType {
-					destructive = append(destructive, DestructiveChange{
+					disallowed = append(disallowed, DestructiveChange{
 						Kind:   "drop_column",
 						Schema: want.Schema,
 						Table:  want.Name,
@@ -213,7 +213,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 					})
 					continue
 				}
-				additive = append(additive, Migration{
+				migrations = append(migrations, Migration{
 					Kind:   "drop_column",
 					Schema: want.Schema,
 					Table:  want.Name,
@@ -229,7 +229,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		for i := range want.Columns {
 			c := &want.Columns[i]
 			if !haveCols[c.Name] {
-				additive = append(additive, Migration{
+				migrations = append(migrations, Migration{
 					Kind:   "add_column",
 					Schema: want.Schema,
 					Table:  want.Name,
@@ -240,7 +240,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 
 		// Constraints: if table exists and desired has PK/unique/FK that actual doesn't, emit add_constraint
 		if want.PrimaryKey != nil && (have.PrimaryKey == nil || !constraintPKEqual(have.PrimaryKey, want.PrimaryKey)) {
-			additive = append(additive, Migration{
+			migrations = append(migrations, Migration{
 				Kind:       "add_constraint",
 				Schema:     want.Schema,
 				Table:      want.Name,
@@ -250,7 +250,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		for _, u := range want.UniqueKeys {
 			if !haveUnique(u, have.UniqueKeys) {
 				u2 := u
-				additive = append(additive, Migration{
+				migrations = append(migrations, Migration{
 					Kind:      "add_constraint",
 					Schema:    want.Schema,
 					Table:     want.Name,
@@ -261,7 +261,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		for _, fk := range want.ForeignKeys {
 			if !haveFK(fk, have.ForeignKeys) {
 				fk2 := fk
-				additive = append(additive, Migration{
+				migrations = append(migrations, Migration{
 					Kind:       "add_constraint",
 					Schema:     want.Schema,
 					Table:      want.Name,
@@ -276,7 +276,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		for key, wantIdx := range desiredIndexes {
 			haveIdx := actualIndexes[key]
 			if haveIdx == nil || !IndexMatches(haveIdx, wantIdx) {
-				additive = append(additive, Migration{
+				migrations = append(migrations, Migration{
 					Kind:   "create_index",
 					Schema: wantIdx.Schema,
 					Table:  wantIdx.TableName,
@@ -286,7 +286,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		}
 		for key, haveIdx := range actualIndexes {
 			if desiredIndexes[key] == nil {
-				destructive = append(destructive, DestructiveChange{
+				disallowed = append(disallowed, DestructiveChange{
 					Kind:   "drop_index",
 					Schema: haveIdx.Schema,
 					Index:  haveIdx.Name,
@@ -295,7 +295,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		}
 	}
 
-	return additive, destructive
+	return migrations, disallowed
 }
 
 func constraintPKEqual(a, b *schema.PrimaryKeyConstraint) bool {
