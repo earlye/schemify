@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/earlye/eaux/go/types"
 	"github.com/earlye/schemify/schemify"
 	"github.com/go-errors/errors"
 	"github.com/spf13/cobra"
@@ -69,7 +70,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	sql, err := schemify.Run(context.Background(), cfg, opts)
 	if err != nil {
-		if gerr := DynamicCast[errors.Error](err); gerr != nil {
+		if gerr := types.DynamicCast[errors.Error](err); gerr != nil {
 			slog.Error("Schemify Error", "error", gerr)
 			fmt.Fprintln(os.Stderr, gerr.ErrorStack())
 		}

@@ -1,6 +1,13 @@
 .PHONY: build test run dry-run clean docker-up docker-down
 
-build: bin/
+dependencies: clean 
+	$(MAKE) .dependencies
+
+.dependencies:
+	go get -u github.com/earlye/eaux/go/types
+	touch $@
+
+build: bin/ .dependencies
 	go build -o bin/schemify ./cmd/schemify
 
 bin/: 
@@ -17,6 +24,7 @@ dry-run: build
 
 clean:
 	rm -rf bin
+	rm -f .dependencies
 
 nuke: clean docker-nuke
 

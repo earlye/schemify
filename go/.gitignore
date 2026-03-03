@@ -1,3 +1,4 @@
 /schemify
 *.exe
 bin
+.dependencies
