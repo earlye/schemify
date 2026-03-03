@@ -43,9 +43,9 @@ type Migration struct {
 	Column   *schema.Column // for add_column: the column to add; for drop_column: Name only
 	Index    *schema.Index  // for create_index
 	// For add_constraint: exactly one of PrimaryKey, UniqueKey, ForeignKey is set.
-	PrimaryKey  *schema.PrimaryKeyConstraint
-	UniqueKey   *schema.UniqueConstraint
-	ForeignKey  *schema.ForeignKey
+	PrimaryKey *schema.PrimaryKeyConstraint
+	UniqueKey  *schema.UniqueConstraint
+	ForeignKey *schema.ForeignKey
 }
 
 // DestructiveChange represents a change we refuse to apply (drop table, column, or index).
@@ -241,7 +241,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		// Constraints: if table exists and desired has PK/unique/FK that actual doesn't, emit add_constraint
 		if want.PrimaryKey != nil && (have.PrimaryKey == nil || !constraintPKEqual(have.PrimaryKey, want.PrimaryKey)) {
 			additive = append(additive, Migration{
-				Kind:        "add_constraint",
+				Kind:       "add_constraint",
 				Schema:     want.Schema,
 				Table:      want.Name,
 				PrimaryKey: want.PrimaryKey,
@@ -285,7 +285,7 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 			}
 		}
 		for key, haveIdx := range actualIndexes {
-			if desiredIndexes == nil || desiredIndexes[key] == nil {
+			if desiredIndexes[key] == nil {
 				destructive = append(destructive, DestructiveChange{
 					Kind:   "drop_index",
 					Schema: haveIdx.Schema,

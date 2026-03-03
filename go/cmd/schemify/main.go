@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/earlye/schemify/schemify"
+	"github.com/go-errors/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -17,14 +19,14 @@ func main() {
 }
 
 var (
-	host     string
-	port     string
-	user     string
-	password string
-	database string
+	host      string
+	port      string
+	user      string
+	password  string
+	database  string
 	schemaDir string
-	dryRun   bool
-	verbose  bool
+	dryRun    bool
+	verbose   bool
 )
 
 var rootCmd = &cobra.Command{
@@ -55,7 +57,7 @@ func envOrDefault(key, def string) string {
 }
 
 func run(cmd *cobra.Command, args []string) error {
-	cfg := &schemify.Config{
+	cfg := &schemify.Options{
 		Host:      host,
 		Port:      port,
 		User:      user,
@@ -67,6 +69,10 @@ func run(cmd *cobra.Command, args []string) error {
 
 	sql, err := schemify.Run(context.Background(), cfg, opts)
 	if err != nil {
+		if gerr := DynamicCast[errors.Error](err); gerr != nil {
+			slog.Error("Schemify Error", "error", gerr)
+			fmt.Fprintln(os.Stderr, gerr.ErrorStack())
+		}
 		return err
 	}
 	if sql != "" {

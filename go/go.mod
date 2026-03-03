@@ -3,6 +3,7 @@ module github.com/earlye/schemify
 go 1.25.6
 
 require (
+	github.com/go-errors/errors v1.5.1
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/spf13/cobra v1.10.2
 	github.com/valkdb/postgresparser v1.1.4
