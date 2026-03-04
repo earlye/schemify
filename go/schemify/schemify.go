@@ -36,6 +36,11 @@ func LoadSchema(fsys fs.FS) (*schema.LoadResult, error) {
 	return schema.LoadFromFS(fsys)
 }
 
+// Connect creates a connection pool. Be sure to defer Close() on the returned pool.
+func Connect(ctx context.Context, opts Options) (*pgxpool.Pool, error) {
+	return db.Connect(ctx, &opts.Database)
+}
+
 // Introspect returns the current schema from the database (tables with constraints, and indexes).
 func Introspect(ctx context.Context, pool *pgxpool.Pool, schemaName string) (*db.IntrospectResult, error) {
 	return db.Introspect(ctx, pool, schemaName)
