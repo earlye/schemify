@@ -8,7 +8,8 @@ dependencies: clean
 	$(MAKE) .dependencies
 
 .dependencies:
-	go get -u github.com/earlye/eaux/go/types
+	cd schemify && go mod tidy
+	go mod tidy	
 	touch $@
 
 .PHONY: buildb

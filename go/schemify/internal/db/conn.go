@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"net/url"
 
-	ss "github.com/earlye/sensitive-strings/golang"
+	ss "github.com/earlye/sensitive-strings/golang/ss"
 	"github.com/go-errors/errors"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
