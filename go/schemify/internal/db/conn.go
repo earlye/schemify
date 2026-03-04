@@ -23,9 +23,10 @@ type Config struct {
 	SSLKey      string
 }
 
-func (c *Config) DSN() (ss.SensitiveString, error) {
+func (c *Config) DSN() (result ss.SensitiveString, err error) {
 	if c.Host == "" || c.User.Value() == "" || c.Database == "" || c.Password.Value() == "" {
-		return "", errors.Errorf("schema: missing required DB_* env (need DB_HOST, DB_USER, DB_NAME, DB_PASSWORD)")
+		err = errors.Errorf("schema: missing required DB_* env (need DB_HOST, DB_USER, DB_NAME, DB_PASSWORD)")
+		return
 	}
 	if c.Port == "" {
 		c.Port = "5432"
@@ -55,7 +56,8 @@ func (c *Config) DSN() (ss.SensitiveString, error) {
 		Path:     "/" + c.Database,
 		RawQuery: q.Encode(),
 	}
-	return *ss.New(u.String()), nil
+	result = *ss.New(u.String()) // TODO: update sensitive string to have a SetPlaintext method.
+	return
 }
 
 // Connect creates a connection pool.
