@@ -74,6 +74,19 @@ Schemify will create missing tables and add missing columns. If the database has
 
 **Allowing table drops:** You can allow dropping a table that is no longer in the desired schema by adding a comment block that starts with `-- DROP TABLE schema.tablename (` and lists the table's columns exactly as in the database; the block must end with `-- );`. The column list in the block is parsed and compared to the current table — only if they match exactly (same columns and types) is the drop allowed; otherwise the run fails with a destructive change.
 
+### Primary keys
+
+Primary keys declared in `CREATE TABLE` are compared against the live database. If a table already exists and its primary key differs from what is declared in the schema (including the case where the schema declares a primary key but the live table has none), Schemify treats this as a **destructive change** and refuses to apply it:
+
+```
+destructive changes are not allowed:
+  - table public.events primary key would change: DB has (id), schema has (tenant_id, id)
+```
+
+Renaming or altering a primary key requires manual intervention. Support for overriding this restriction (analogous to the column- and table-drop directives) is planned but not yet implemented.
+
+If the schema has **no** primary key but the live table does, Schemify also treats this as a destructive change — the schema is implicitly requesting the primary key be dropped.
+
 ### Indexes
 
 Indexes are declared alongside your `CREATE TABLE` statements using `CREATE INDEX CONCURRENTLY`:

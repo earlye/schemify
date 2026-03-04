@@ -35,6 +35,7 @@ func TablesMatchForDrop(actual, expected *schema.Table) bool {
 }
 
 // Migration represents a single change to apply (additive or allowed destructive).
+// TODO: migrate this to be a discriminated union so it can be marshaled to JSON/YAML/SQL/etc.
 type Migration struct {
 	Kind     string         // "create_table", "add_column", "drop_column", "drop_table", "create_index", "add_constraint"
 	Schema   string         // e.g. "public"
@@ -48,14 +49,14 @@ type Migration struct {
 	ForeignKey *schema.ForeignKey
 }
 
-// DestructiveChange represents a change we refuse to apply (drop table, column, or index).
+// DestructiveChange represents a change we refuse to apply (drop table, column, index, or pk mismatch).
 type DestructiveChange struct {
-	Kind   string // "drop_table", "drop_column", or "drop_index"
+	Kind   string // "drop_table", "drop_column", "drop_index", or "primary_key_mismatch"
 	Schema string
 	Table  string
 	Column string // only for drop_column
 	Index  string // only for drop_index
-	Detail string // optional; e.g. column drift when drop_table rejected due to mismatch
+	Detail string // optional; e.g. column drift when drop_table rejected, or pk drift description
 }
 
 func (d DestructiveChange) String() string {
@@ -70,6 +71,12 @@ func (d DestructiveChange) String() string {
 		return fmt.Sprintf("index %s.%s would be dropped", d.Schema, d.Index)
 	case "drop_column":
 		return fmt.Sprintf("column %s.%s.%s would be dropped", d.Schema, d.Table, d.Column)
+	case "primary_key_mismatch":
+		s := fmt.Sprintf("table %s.%s primary key would change", d.Schema, d.Table)
+		if d.Detail != "" {
+			s += ": " + d.Detail
+		}
+		return s
 	default:
 		return fmt.Sprintf("%s %s.%s would be dropped", d.Kind, d.Schema, d.Table)
 	}
@@ -238,13 +245,16 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 			}
 		}
 
-		// Constraints: if table exists and desired has PK/unique/FK that actual doesn't, emit add_constraint
-		if want.PrimaryKey != nil && (have.PrimaryKey == nil || !constraintPKEqual(have.PrimaryKey, want.PrimaryKey)) {
-			migrations = append(migrations, Migration{
-				Kind:       "add_constraint",
-				Schema:     want.Schema,
-				Table:      want.Name,
-				PrimaryKey: want.PrimaryKey,
+		// Primary key: any mismatch on an existing table is a destructive change.
+		// This includes: desired has a different PK, desired has no PK but live DB does (implicit drop),
+		// or desired has a PK but live DB has none.
+		if !constraintPKEqual(have.PrimaryKey, want.PrimaryKey) {
+			detail := describePKDrift(have.PrimaryKey, want.PrimaryKey)
+			disallowed = append(disallowed, DestructiveChange{
+				Kind:   "primary_key_mismatch",
+				Schema: want.Schema,
+				Table:  want.Name,
+				Detail: detail,
 			})
 		}
 		for _, u := range want.UniqueKeys {
@@ -296,6 +306,18 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 	}
 
 	return migrations, disallowed
+}
+
+func describePKDrift(actual, desired *schema.PrimaryKeyConstraint) string {
+	dbCols := "(none)"
+	if actual != nil && len(actual.Columns) > 0 {
+		dbCols = "(" + strings.Join(actual.Columns, ", ") + ")"
+	}
+	wantCols := "(none)"
+	if desired != nil && len(desired.Columns) > 0 {
+		wantCols = "(" + strings.Join(desired.Columns, ", ") + ")"
+	}
+	return fmt.Sprintf("DB has %s, schema has %s", dbCols, wantCols)
 }
 
 func constraintPKEqual(a, b *schema.PrimaryKeyConstraint) bool {

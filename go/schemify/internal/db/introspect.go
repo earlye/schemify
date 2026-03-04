@@ -278,12 +278,12 @@ func listConstraints(ctx context.Context, pool *pgxpool.Pool, schemaName string,
 	return nil
 }
 
-// listIndexes returns all indexes in the schema. Key: schema.indexname.
-// Excludes indexes that are backing PK/UNIQUE constraints (we only want standalone CREATE INDEX).
-// Actually we want all indexes for diffing; the DB may have both constraint-backed and standalone.
-// So we list all indexes and return them as schema.Index (including unique and index type).
+// listIndexes returns standalone (non-constraint-backing) indexes in the schema. Key: schema.indexname.
+// Excludes indexes that back PRIMARY KEY or UNIQUE constraints, since those are managed via
+// constraint syntax (not CREATE INDEX) and would otherwise appear as phantom drop_index changes.
 func listIndexes(ctx context.Context, pool *pgxpool.Pool, schemaName string) (map[string]*schema.Index, error) {
 	// pg_index: indkey is int2vector of attnums; use generate_subscripts to get column names in order.
+	// Exclude constraint-backing indexes by filtering out those referenced in pg_constraint.
 	rows, err := pool.Query(ctx, `
 		SELECT n.nspname, c.relname AS indexname, t.relname AS tablename, tn.nspname AS tableschema,
 		       i.indisunique, am.amname AS indextype,
@@ -296,7 +296,12 @@ func listIndexes(ctx context.Context, pool *pgxpool.Pool, schemaName string) (ma
 		JOIN pg_class t ON t.oid = i.indrelid
 		JOIN pg_namespace tn ON tn.oid = t.relnamespace
 		JOIN pg_am am ON am.oid = c.relam
-		WHERE n.nspname = $1 AND c.relkind = 'i'`,
+		WHERE n.nspname = $1 AND c.relkind = 'i'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM pg_constraint con
+		      WHERE con.conindid = c.oid
+		        AND con.contype IN ('p', 'u')
+		  )`,
 		schemaName)
 	if err != nil {
 		return nil, err
