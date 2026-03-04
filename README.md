@@ -42,26 +42,4 @@ Schemify will create missing tables and add missing columns. If the database has
 
 ## Using as a library
 
-```go
-import "github.com/earlye/schemify/schemify"
-
-cfg := &schemify.Config{
-    Host:      "localhost",
-    Port:      "5432",
-    User:      "myuser",
-    Password:  "mypass",
-    Database:  "mydb",
-    SchemaDir: "./schema",
-}
-sql, err := schemify.Run(ctx, cfg, schemify.ApplyOptions{Verbose: true})
-// Or: load schema, introspect, diff, and apply in separate steps via
-// schemify.LoadSchema, schemify.Introspect, schemify.Diff, schemify.Apply.
-```
-
-## Docker and Postgres 18
-
-The Go app uses Postgres 18 in Docker. The data volume must be mounted at **`/var/lib/postgresql`** (not `/var/lib/postgresql/data`), because Postgres 18 creates a versioned subdirectory (e.g. `18/data`) under that path. See [go/docker-compose.yml](go/docker-compose.yml).
-
-## License
-
-MIT. Original work Copyright (c) 2018 Earnest; derivative work and maintenance Copyright (c) 2026 earlye.
+See [./go/schemify/README.md](./go/schemify/README.md) for details.
