@@ -1,5 +1,8 @@
 .PHONY: build test run dry-run clean docker-up docker-down
 
+.PHONY: all
+all: bin/schemify
+
 dependencies: clean 
 	$(MAKE) .dependencies
 
@@ -7,7 +10,11 @@ dependencies: clean
 	go get -u github.com/earlye/eaux/go/types
 	touch $@
 
-build: bin/ .dependencies
+
+.PHONY: buildb
+build: bin/schemify
+
+bin/schemify: bin/ .dependencies
 	go build -o bin/schemify ./cmd/schemify
 
 bin/: 
@@ -49,7 +56,6 @@ apply-v02: docker-up build
 
 apply-v03-fail: docker-up build 
 	./bin/schemify -s ./schemas/demo-v03-destructive -v
-
 
 apply-v03-override: docker-up build 
 	./bin/schemify -s ./schemas/demo-v03-destructive-col-override -v

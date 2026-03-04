@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/earlye/eaux/go/types"
-	"github.com/earlye/schemify/schemify"
+	"github.com/earlye/schemify/go/schemify"
 	"github.com/go-errors/errors"
 	"github.com/spf13/cobra"
 )

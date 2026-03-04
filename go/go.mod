@@ -1,4 +1,4 @@
-module github.com/earlye/schemify
+module github.com/earlye/schemify/go
 
 go 1.25.6
 
