@@ -12,7 +12,7 @@ func TestLoadFromDir(t *testing.T) {
 	writeFile(t, dir, "a.sql", "CREATE TABLE public.users (id integer, username character varying(255));")
 	writeFile(t, dir, "b.sql", "CREATE TABLE public.events (id integer, event character varying(255));")
 
-	got, err := LoadFromDir(dir)
+	got, err := LoadFromFS(os.DirFS(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestParseDDL_SingleTable(t *testing.T) {
 }
 
 func TestLoadFromDir_NoSuchDir(t *testing.T) {
-	_, err := LoadFromDir("/nonexistent-schema-dir-xyz")
+	_, err := LoadFromFS(os.DirFS("/nonexistent-schema-dir-xyz"))
 	if err == nil {
 		t.Fatal("expected error for nonexistent dir")
 	}
@@ -81,7 +81,7 @@ func TestLoadFromDir_NoSuchDir(t *testing.T) {
 
 func TestLoadFromDir_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	got, err := LoadFromDir(dir)
+	got, err := LoadFromFS(os.DirFS(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestLoadAllowDropTableDefs(t *testing.T) {
 	writeFile(t, dir, "a.sql", "CREATE TABLE public.users (id integer);\n-- DROP TABLE public.events (\n-- );\n")
 	writeFile(t, dir, "b.sql", "-- DROP TABLE public.other (\n-- );\n")
 
-	defs, err := LoadAllowDropTableDefs(dir)
+	defs, err := LoadAllowDropTableDefs(os.DirFS(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestLoadFromDir_CommentOnlyFile(t *testing.T) {
 	writeFile(t, dir, "comments_only.sql", "-- DROP TABLE public.foo (\n-- );")
 	writeFile(t, dir, "real.sql", "CREATE TABLE public.bar (id integer);")
 
-	got, err := LoadFromDir(dir)
+	got, err := LoadFromFS(os.DirFS(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestLoadAllowDropTableDefs_DropTableComment(t *testing.T) {
 -- );
 `)
 
-	defs, err := LoadAllowDropTableDefs(dir)
+	defs, err := LoadAllowDropTableDefs(os.DirFS(dir))
 	if err != nil {
 		t.Fatal(err)
 	}

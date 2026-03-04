@@ -23,6 +23,7 @@ bin/:
 .PHONY: test
 test:
 	go test ./...
+	cd schemify && go test ./...
 
 .PHONY: clean
 clean:
