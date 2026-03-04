@@ -15,31 +15,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Options holds database connection and schema directory.
-type Options struct {
-	Host      string
-	Port      string
-	User      string
-	Password  string
-	Database  string
-	SchemaDir string
-}
-
-// DBConfig returns connection config for the db package.
-func (c *Options) DBConfig() *db.Config {
-	return &db.Config{
-		Host:     c.Host,
-		Port:     c.Port,
-		User:     c.User,
-		Password: c.Password,
-		Database: c.Database,
-	}
-}
+type DatabaseConfig = db.Config
 
 // ApplyOptions configures apply behavior (dry-run, verbose).
 type ApplyOptions struct {
 	DryRun  bool
 	Verbose bool
+}
+
+// Options holds database connection and schema directory.
+type Options struct {
+	SchemaDir    string
+	Database     DatabaseConfig
+	ApplyOptions ApplyOptions
 }
 
 // LoadSchema reads desired schema from SQL files in dir (e.g. *.sql). Returns tables and indexes.
@@ -75,8 +63,8 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 // Run connects to the database, loads desired schema from Config.SchemaDir,
 // diffs against the current DB, and applies changes (or exits with error on destructive).
 // It returns applied SQL (or dry-run SQL), or an error including destructive change messages.
-func Run(ctx context.Context, cfg *Options, opts ApplyOptions) (sql string, err error) {
-	pool, err := db.Connect(ctx, cfg.DBConfig())
+func Run(ctx context.Context, cfg *Options) (sql string, err error) {
+	pool, err := db.Connect(ctx, &cfg.Database)
 	if err != nil {
 		return "", errors.WrapPrefix(err, "connect", 0)
 	}
@@ -107,5 +95,5 @@ func Run(ctx context.Context, cfg *Options, opts ApplyOptions) (sql string, err 
 		return "", errors.Errorf("%s", strings.Join(msg, "\n"))
 	}
 
-	return Apply(ctx, pool, migrations, opts)
+	return Apply(ctx, pool, migrations, cfg.ApplyOptions)
 }

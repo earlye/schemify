@@ -5,6 +5,7 @@ go 1.25.6
 require (
 	github.com/earlye/eaux/go/types v0.0.1
 	github.com/earlye/schemify/go/schemify v0.0.0
+	github.com/earlye/sensitive-strings/golang v1.0.2
 	github.com/go-errors/errors v1.5.1
 	github.com/spf13/cobra v1.10.2
 )
