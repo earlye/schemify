@@ -3,39 +3,33 @@ package apply
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/earlye/schemify/go/schemify/internal/diff"
 	"github.com/earlye/schemify/go/schemify/internal/schema"
+	"github.com/go-errors/errors"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Options configures apply behavior.
 type Options struct {
-	DryRun  bool
-	Verbose bool
+	DryRun bool
 }
 
 // Apply runs the additive migrations. create_index (CONCURRENTLY) runs outside a transaction;
 // all other migrations run in a single transaction (unless DryRun).
 // If DryRun is true, SQL is returned as a string and no changes are made.
-func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration, opts Options) (executedSQL string, err error) {
-	var sb strings.Builder
+func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration, opts Options) (err error) {
 	if opts.DryRun {
 		for _, m := range migrations {
 			sql, err := migrationSQL(m)
 			if err != nil {
-				return "", err
+				return err
 			}
-			if opts.Verbose {
-				sb.WriteString(sql)
-				sb.WriteString("\n")
-			}
-			sb.WriteString("-- would run: ")
-			sb.WriteString(sql)
-			sb.WriteString("\n")
+			slog.Debug("Would run:", "sql", sql)
 		}
-		return sb.String(), nil
+		return nil
 	}
 
 	// Split: create_index must run outside transaction (CONCURRENTLY); rest in one tx.
@@ -51,7 +45,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 	if len(inTx) > 0 {
 		tx, err := pool.Begin(ctx)
 		if err != nil {
-			return "", fmt.Errorf("begin transaction: %w", err)
+			return errors.WrapPrefix(err, "begin transaction", 0)
 		}
 		defer func() {
 			if err != nil {
@@ -62,32 +56,30 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 		for _, m := range inTx {
 			sql, err := migrationSQL(m)
 			if err != nil {
-				return sb.String(), err
+				return err
 			}
-			sb.WriteString(sql)
-			sb.WriteString("\n")
+			slog.Debug("Running:", "sql", sql)
 			if _, err := tx.Exec(ctx, sql); err != nil {
-				return sb.String(), fmt.Errorf("execute %s: %w", sql, err)
+				return errors.WrapPrefix(err, fmt.Sprintf("execute %s", sql), 0)
 			}
 		}
 
 		if err := tx.Commit(ctx); err != nil {
-			return sb.String(), fmt.Errorf("commit: %w", err)
+			return errors.WrapPrefix(err, "commit", 0)
 		}
 	}
 
 	for _, m := range outTx {
 		sql, err := migrationSQL(m)
 		if err != nil {
-			return sb.String(), err
+			return err
 		}
-		sb.WriteString(sql)
-		sb.WriteString("\n")
+		slog.Debug("Running:", "sql", sql)
 		if _, err := pool.Exec(ctx, sql); err != nil {
-			return sb.String(), fmt.Errorf("execute %s: %w", sql, err)
+			return errors.WrapPrefix(err, fmt.Sprintf("pool.Exec %s", sql), 0)
 		}
 	}
-	return sb.String(), nil
+	return nil
 }
 
 func migrationSQL(m diff.Migration) (string, error) {

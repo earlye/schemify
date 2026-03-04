@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -66,7 +67,10 @@ func LoadFromFS(fsys fs.FS) (*LoadResult, error) {
 		}
 	}
 
-	slog.Debug("Loaded schema", "tables", maps.Keys(tables), "indexes", maps.Keys(indexes))
+	slog.Debug("Loaded schema",
+		"tables", slices.Collect(maps.Keys(tables)),
+		"indexes", slices.Collect(maps.Keys(indexes)),
+	)
 
 	return &LoadResult{Tables: tables, Indexes: indexes}, nil
 }

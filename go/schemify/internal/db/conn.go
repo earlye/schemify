@@ -46,7 +46,7 @@ func (c *Config) DSN() (result ss.SensitiveString, err error) {
 	if c.SSLKey != "" {
 		q.Set("sslkey", c.SSLKey)
 	}
-	slog.Info("GetDSN",
+	slog.Debug("Config.DSN()",
 		"config", c, // This is safe because user/pass are sensitive string objects
 	)
 	u := &url.URL{

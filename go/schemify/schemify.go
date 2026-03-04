@@ -17,12 +17,7 @@ import (
 )
 
 type DatabaseConfig = db.Config
-
-// ApplyOptions configures apply behavior (dry-run, verbose).
-type ApplyOptions struct {
-	DryRun  bool
-	Verbose bool
-}
+type ApplyOptions = apply.Options
 
 // Options holds database connection and schema directory.
 type Options struct {
@@ -59,11 +54,8 @@ func LoadAllowDropTableDefs(fsys fs.FS) (map[string]*schema.Table, error) {
 }
 
 // Apply runs additive migrations. Use ApplyOptions.DryRun to only print SQL.
-func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration, opts ApplyOptions) (string, error) {
-	return apply.Apply(ctx, pool, migrations, apply.Options{
-		DryRun:  opts.DryRun,
-		Verbose: opts.Verbose,
-	})
+func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration, opts ApplyOptions) error {
+	return apply.Apply(ctx, pool, migrations, opts)
 }
 
 // Plan computes the minimal set of migrations to apply to the database, and enforces
@@ -99,16 +91,16 @@ func Plan(ctx context.Context, cfg *Options, pool *pgxpool.Pool) ([]diff.Migrati
 // Run connects to the database, loads desired schema from Config.SchemaDir,
 // diffs against the current DB, and applies changes (or exits with error on destructive).
 // It returns applied SQL (or dry-run SQL), or an error including destructive change messages.
-func Run(ctx context.Context, cfg *Options) (sql string, err error) {
+func Run(ctx context.Context, cfg *Options) (err error) {
 	pool, err := db.Connect(ctx, &cfg.Database)
 	if err != nil {
-		return "", errors.WrapPrefix(err, "connect", 0)
+		return errors.WrapPrefix(err, "connect", 0)
 	}
 	defer pool.Close()
 
 	migrations, err := Plan(ctx, cfg, pool)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	return Apply(ctx, pool, migrations, cfg.ApplyOptions)

@@ -30,6 +30,7 @@ var rootCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
+var verbose bool
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&options.Database.Host, "host", "H", envOrDefault("DB_HOST", "localhost"), "database host")
@@ -43,7 +44,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&options.Database.SSLKey, "ssl-key", "K", envOrDefault("DB_SSLKEY", ""), "database SSL key")
 	rootCmd.PersistentFlags().StringVarP(&schemaDir, "schema", "s", envOrDefault("SCHEMA_DIR", "./schemas/demo-v01"), "directory containing *.sql schema files")
 	rootCmd.PersistentFlags().BoolVarP(&options.ApplyOptions.DryRun, "dry-run", "n", false, "print SQL only, do not apply")
-	rootCmd.PersistentFlags().BoolVarP(&options.ApplyOptions.Verbose, "verbose", "v", false, "verbose output")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 }
 
 func envOrDefault(key, def string) string {
@@ -54,17 +55,22 @@ func envOrDefault(key, def string) string {
 }
 
 func run(cmd *cobra.Command, args []string) error {
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+
 	options.Schema = os.DirFS(schemaDir)
-	sql, err := schemify.Run(context.Background(), &options)
+	err := schemify.Run(context.Background(), &options)
 	if err != nil {
 		if gerr := types.DynamicCast[errors.Error](err); gerr != nil {
 			slog.Error("Schemify Error", "error", gerr)
 			fmt.Fprintln(os.Stderr, gerr.ErrorStack())
 		}
 		return err
-	}
-	if sql != "" {
-		fmt.Print(sql)
 	}
 	return nil
 }
