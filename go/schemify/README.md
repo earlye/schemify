@@ -13,24 +13,34 @@ go get github.com/earlye/schemify/go/schemify
 ## Usage
 
 ```go
-import "github.com/earlye/schemify/go/schemify"
+import (
+    "io/fs"
+    "os"
+
+    "github.com/earlye/schemify/go/schemify"
+)
 
 cfg := &schemify.Options{
-    Host:      "localhost",
-    Port:      "5432",
-    User:      "myuser",
-    Password:  "mypass",
-    Database:  "mydb",
-    SchemaDir: "./schema",
+    Schema: os.DirFS("./schema"),
+    Database: schemify.DatabaseConfig{
+        Host:     "localhost",
+        Port:     "5432",
+        Database: "mydb",
+    },
+    ApplyOptions: schemify.ApplyOptions{Verbose: true},
 }
-sql, err := schemify.Run(ctx, cfg, schemify.ApplyOptions{Verbose: true})
+cfg.Database.User.Set("myuser")
+cfg.Database.Password.Set("mypass")
+
+sql, err := schemify.Run(ctx, cfg)
 ```
 
 You can also call the lower-level steps individually:
 
 ```go
-// Load desired schema from .sql files
-loadResult, err := schemify.LoadSchema("./schema")
+// Load desired schema from an fs.FS (e.g. os.DirFS or embed.FS)
+schemaFS := os.DirFS("./schema")
+loadResult, err := schemify.LoadSchema(schemaFS)
 
 // Introspect the live database
 pool, _ := pgxpool.New(ctx, connStr)

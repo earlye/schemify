@@ -20,6 +20,7 @@ func main() {
 }
 
 var options = schemify.Options{}
+var schemaDir string
 
 var rootCmd = &cobra.Command{
 	Use:   "schemify",
@@ -40,7 +41,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&options.Database.SSLRootCert, "ssl-root-cert", "R", envOrDefault("DB_SSLROOTCERT", ""), "database SSL root certificate")
 	rootCmd.PersistentFlags().StringVarP(&options.Database.SSLCert, "ssl-cert", "C", envOrDefault("DB_SSLCERT", ""), "database SSL certificate")
 	rootCmd.PersistentFlags().StringVarP(&options.Database.SSLKey, "ssl-key", "K", envOrDefault("DB_SSLKEY", ""), "database SSL key")
-	rootCmd.PersistentFlags().StringVarP(&options.SchemaDir, "schema", "s", envOrDefault("SCHEMA_DIR", "./schemas/demo-v01"), "directory containing *.sql schema files")
+	rootCmd.PersistentFlags().StringVarP(&schemaDir, "schema", "s", envOrDefault("SCHEMA_DIR", "./schemas/demo-v01"), "directory containing *.sql schema files")
 	rootCmd.PersistentFlags().BoolVarP(&options.ApplyOptions.DryRun, "dry-run", "n", false, "print SQL only, do not apply")
 	rootCmd.PersistentFlags().BoolVarP(&options.ApplyOptions.Verbose, "verbose", "v", false, "verbose output")
 }
@@ -53,7 +54,7 @@ func envOrDefault(key, def string) string {
 }
 
 func run(cmd *cobra.Command, args []string) error {
-
+	options.Schema = os.DirFS(schemaDir)
 	sql, err := schemify.Run(context.Background(), &options)
 	if err != nil {
 		if gerr := types.DynamicCast[errors.Error](err); gerr != nil {

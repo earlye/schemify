@@ -5,6 +5,7 @@ package schemify
 
 import (
 	"context"
+	"io/fs"
 	"strings"
 
 	"github.com/earlye/schemify/go/schemify/internal/apply"
@@ -25,14 +26,14 @@ type ApplyOptions struct {
 
 // Options holds database connection and schema directory.
 type Options struct {
-	SchemaDir    string
+	Schema       fs.FS
 	Database     DatabaseConfig
 	ApplyOptions ApplyOptions
 }
 
-// LoadSchema reads desired schema from SQL files in dir (e.g. *.sql). Returns tables and indexes.
-func LoadSchema(dir string) (*schema.LoadResult, error) {
-	return schema.LoadFromDir(dir)
+// LoadSchema reads desired schema from SQL files in fsys (e.g. *.sql). Returns tables and indexes.
+func LoadSchema(fsys fs.FS) (*schema.LoadResult, error) {
+	return schema.LoadFromFS(fsys)
 }
 
 // Introspect returns the current schema from the database (tables with constraints, and indexes).
@@ -46,10 +47,10 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 	return diff.Diff(desired, actual, desiredIndexes, actualIndexes, allowDropTableDefs)
 }
 
-// LoadAllowDropTableDefs reads "-- DROP TABLE ... (" ... "-- );" blocks from SQL files in dir,
+// LoadAllowDropTableDefs reads "-- DROP TABLE ... (" ... "-- );" blocks from SQL files in fsys,
 // parses each as CREATE TABLE and returns expected definitions for strict drop-table comparison.
-func LoadAllowDropTableDefs(dir string) (map[string]*schema.Table, error) {
-	return schema.LoadAllowDropTableDefs(dir)
+func LoadAllowDropTableDefs(fsys fs.FS) (map[string]*schema.Table, error) {
+	return schema.LoadAllowDropTableDefs(fsys)
 }
 
 // Apply runs additive migrations. Use ApplyOptions.DryRun to only print SQL.
@@ -58,6 +59,36 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 		DryRun:  opts.DryRun,
 		Verbose: opts.Verbose,
 	})
+}
+
+// Plan computes the minimal set of migrations to apply to the database, and enforces
+// that destructive changes are disallowed (barring overrides).
+func Plan(ctx context.Context, cfg *Options, pool *pgxpool.Pool) ([]diff.Migration, error) {
+	loadResult, err := LoadSchema(cfg.Schema)
+	if err != nil {
+		return nil, errors.WrapPrefix(err, "load schema", 0)
+	}
+
+	introResult, err := Introspect(ctx, pool, "public")
+	if err != nil {
+		return nil, errors.WrapPrefix(err, "introspect", 0)
+	}
+
+	allowDropTableDefs, err := LoadAllowDropTableDefs(cfg.Schema)
+	if err != nil {
+		return nil, errors.WrapPrefix(err, "load allow-drop table defs", 0)
+	}
+
+	migrations, disallowed := Diff(loadResult.Tables, introResult.Tables, loadResult.Indexes, introResult.Indexes, allowDropTableDefs)
+	if len(disallowed) > 0 {
+		var msg []string
+		msg = append(msg, "destructive changes are not allowed:")
+		for _, d := range disallowed {
+			msg = append(msg, "  - "+d.String())
+		}
+		return nil, errors.Errorf("%s", strings.Join(msg, "\n"))
+	}
+	return migrations, nil
 }
 
 // Run connects to the database, loads desired schema from Config.SchemaDir,
@@ -70,29 +101,9 @@ func Run(ctx context.Context, cfg *Options) (sql string, err error) {
 	}
 	defer pool.Close()
 
-	loadResult, err := LoadSchema(cfg.SchemaDir)
+	migrations, err := Plan(ctx, cfg, pool)
 	if err != nil {
-		return "", errors.WrapPrefix(err, "load schema", 0)
-	}
-
-	introResult, err := Introspect(ctx, pool, "public")
-	if err != nil {
-		return "", errors.WrapPrefix(err, "introspect", 0)
-	}
-
-	allowDropTableDefs, err := LoadAllowDropTableDefs(cfg.SchemaDir)
-	if err != nil {
-		return "", errors.WrapPrefix(err, "load allow-drop table defs", 0)
-	}
-
-	migrations, disallowed := Diff(loadResult.Tables, introResult.Tables, loadResult.Indexes, introResult.Indexes, allowDropTableDefs)
-	if len(disallowed) > 0 {
-		var msg []string
-		msg = append(msg, "destructive changes are not allowed:")
-		for _, d := range disallowed {
-			msg = append(msg, "  - "+d.String())
-		}
-		return "", errors.Errorf("%s", strings.Join(msg, "\n"))
+		return "", err
 	}
 
 	return Apply(ctx, pool, migrations, cfg.ApplyOptions)

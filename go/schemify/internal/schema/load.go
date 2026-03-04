@@ -2,8 +2,7 @@ package schema
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"regexp"
 	"sort"
 	"strings"
@@ -13,16 +12,16 @@ import (
 
 // LoadResult holds the result of LoadFromDir (tables and indexes).
 type LoadResult struct {
-	Tables  map[string]*Table  // key: schema.tablename
-	Indexes map[string]*Index  // key: schema.indexname
+	Tables  map[string]*Table // key: schema.tablename
+	Indexes map[string]*Index // key: schema.indexname
 }
 
 // LoadFromDir reads all *.sql files from dir, parses CREATE TABLE and CREATE INDEX statements,
 // and returns the desired schema (tables with optional PK/UNIQUE/FK, and indexes).
 // Indexes must use CREATE INDEX CONCURRENTLY or loading fails (for large-table safety).
 // Comments are retained in the source for future directive parsing.
-func LoadFromDir(dir string) (*LoadResult, error) {
-	entries, err := os.ReadDir(dir)
+func LoadFromFS(fsys fs.FS) (*LoadResult, error) {
+	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return nil, fmt.Errorf("read schema dir: %w", err)
 	}
@@ -33,7 +32,7 @@ func LoadFromDir(dir string) (*LoadResult, error) {
 			continue
 		}
 		if strings.HasSuffix(strings.ToLower(e.Name()), ".sql") {
-			sqlFiles = append(sqlFiles, filepath.Join(dir, e.Name()))
+			sqlFiles = append(sqlFiles, e.Name())
 		}
 	}
 	sort.Strings(sqlFiles)
@@ -42,7 +41,7 @@ func LoadFromDir(dir string) (*LoadResult, error) {
 	indexes := make(map[string]*Index)
 
 	for _, path := range sqlFiles {
-		body, err := os.ReadFile(path)
+		body, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
@@ -65,12 +64,12 @@ func LoadFromDir(dir string) (*LoadResult, error) {
 	return &LoadResult{Tables: tables, Indexes: indexes}, nil
 }
 
-// LoadAllowDropTableDefs reads all *.sql files in dir, finds "-- DROP TABLE schema.tablename ("
+// LoadAllowDropTableDefs reads all *.sql files in fsys, finds "-- DROP TABLE schema.tablename ("
 // ... "-- );" blocks, converts each to CREATE TABLE and parses to get expected table definitions.
 // Returns a map keyed by table key (e.g. "public.events"); only successfully parsed blocks are included.
 // Last occurrence wins if the same table appears in multiple blocks.
-func LoadAllowDropTableDefs(dir string) (map[string]*Table, error) {
-	entries, err := os.ReadDir(dir)
+func LoadAllowDropTableDefs(fsys fs.FS) (map[string]*Table, error) {
+	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return nil, fmt.Errorf("read schema dir: %w", err)
 	}
@@ -81,14 +80,14 @@ func LoadAllowDropTableDefs(dir string) (map[string]*Table, error) {
 			continue
 		}
 		if strings.HasSuffix(strings.ToLower(e.Name()), ".sql") {
-			sqlFiles = append(sqlFiles, filepath.Join(dir, e.Name()))
+			sqlFiles = append(sqlFiles, e.Name())
 		}
 	}
 	sort.Strings(sqlFiles)
 
 	out := make(map[string]*Table)
 	for _, path := range sqlFiles {
-		body, err := os.ReadFile(path)
+		body, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
@@ -288,14 +287,14 @@ func parseDDL(sql string) ([]*Table, []*Index, error) {
 					}
 				}
 				indexes = append(indexes, &Index{
-					Name:          action.ObjectName,
-					Schema:        idxSchema,
-					TableSchema:   tbl.Schema,
-					TableName:     tbl.Name,
-					Columns:       append([]string(nil), action.Columns...),
-					Unique:        unique,
-					IndexType:     idxType,
-					Concurrently:  true,
+					Name:         action.ObjectName,
+					Schema:       idxSchema,
+					TableSchema:  tbl.Schema,
+					TableName:    tbl.Name,
+					Columns:      append([]string(nil), action.Columns...),
+					Unique:       unique,
+					IndexType:    idxType,
+					Concurrently: true,
 				})
 			}
 		}
