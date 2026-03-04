@@ -18,6 +18,7 @@ import (
 
 type DatabaseConfig = db.Config
 type ApplyOptions = apply.Options
+type Migration = diff.Migration
 
 // Options holds database connection and schema directory.
 type Options struct {
@@ -60,7 +61,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 
 // Plan computes the minimal set of migrations to apply to the database, and enforces
 // that destructive changes are disallowed (barring overrides).
-func Plan(ctx context.Context, cfg *Options, pool *pgxpool.Pool) ([]diff.Migration, error) {
+func Plan(ctx context.Context, cfg *Options, pool *pgxpool.Pool) ([]Migration, error) {
 	loadResult, err := LoadSchema(cfg.Schema)
 	if err != nil {
 		return nil, errors.WrapPrefix(err, "load schema", 0)

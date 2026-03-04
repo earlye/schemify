@@ -1,6 +1,6 @@
 module github.com/earlye/schemify/go
 
-go 1.25.6
+go 1.26.0
 
 require (
 	github.com/earlye/eaux/go/types v0.0.1
