@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/url"
 
@@ -24,7 +23,7 @@ type Config struct {
 	SSLKey      string
 }
 
-func (c *Config) DSN() (string, error) {
+func (c *Config) DSN() (ss.SensitiveString, error) {
 	if c.Host == "" || c.User.Value() == "" || c.Database == "" || c.Password.Value() == "" {
 		return "", errors.Errorf("schema: missing required DB_* env (need DB_HOST, DB_USER, DB_NAME, DB_PASSWORD)")
 	}
@@ -56,7 +55,7 @@ func (c *Config) DSN() (string, error) {
 		Path:     "/" + c.Database,
 		RawQuery: q.Encode(),
 	}
-	return u.String(), nil
+	return *ss.New(u.String()), nil
 }
 
 // Connect creates a connection pool.
@@ -65,13 +64,13 @@ func Connect(ctx context.Context, cfg *Config) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := pgxpool.New(ctx, dsn.Value())
 	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
+		return nil, errors.WrapPrefix(err, "pgxpool.New failed", 0)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("ping: %w", err)
+		return nil, errors.WrapPrefix(err, "pool.Ping failed", 0)
 	}
 	return pool, nil
 }

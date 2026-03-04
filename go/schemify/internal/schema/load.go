@@ -3,6 +3,8 @@ package schema
 import (
 	"fmt"
 	"io/fs"
+	"log/slog"
+	"maps"
 	"regexp"
 	"sort"
 	"strings"
@@ -21,6 +23,8 @@ type LoadResult struct {
 // Indexes must use CREATE INDEX CONCURRENTLY or loading fails (for large-table safety).
 // Comments are retained in the source for future directive parsing.
 func LoadFromFS(fsys fs.FS) (*LoadResult, error) {
+	slog.Debug("Loading schema from FS", "fsys", fsys)
+
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return nil, fmt.Errorf("read schema dir: %w", err)
@@ -36,6 +40,7 @@ func LoadFromFS(fsys fs.FS) (*LoadResult, error) {
 		}
 	}
 	sort.Strings(sqlFiles)
+	slog.Debug("Found SQL files:", "sqlFiles", sqlFiles)
 
 	tables := make(map[string]*Table)
 	indexes := make(map[string]*Index)
@@ -60,6 +65,8 @@ func LoadFromFS(fsys fs.FS) (*LoadResult, error) {
 			indexes[key] = idx
 		}
 	}
+
+	slog.Debug("Loaded schema", "tables", maps.Keys(tables), "indexes", maps.Keys(indexes))
 
 	return &LoadResult{Tables: tables, Indexes: indexes}, nil
 }
