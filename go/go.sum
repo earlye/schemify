@@ -6,8 +6,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/earlye/eaux/go/types v0.0.1 h1:vpYragiFM19k6rZg6UZLV5Z6rSuov471OcIQOQmcgVs=
 github.com/earlye/eaux/go/types v0.0.1/go.mod h1:O4/1A908k+vAYdZ+6ddeovQjwbDvp89sXRUWcE1ATxM=
-github.com/earlye/sensitive-strings/golang/ss v0.0.1 h1:p0PIiLmx7EnD7oj/lQb0OigNtpgRL1WKAxPT7a6rWA0=
-github.com/earlye/sensitive-strings/golang/ss v0.0.1/go.mod h1:OJosU8dg6MiZUw5cliOggYe7O11w0JJOMAjyhBR7AT0=
+github.com/earlye/sensitive-strings/golang/ss v0.0.2 h1:FRoPHIi+Jt18nZfQrcfHDd8aRok+nAxJPrpf+uLejJ0=
+github.com/earlye/sensitive-strings/golang/ss v0.0.2/go.mod h1:OJosU8dg6MiZUw5cliOggYe7O11w0JJOMAjyhBR7AT0=
 github.com/go-errors/errors v1.5.1 h1:ZwEMSLRCapFLflTpT7NKaAc7ukJ8ZPEjzlxt8rPN8bk=
 github.com/go-errors/errors v1.5.1/go.mod h1:sIVyrIiJhuEF+Pj9Ebtd6P/rEYROXFi3BopGUQ5a5Og=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=

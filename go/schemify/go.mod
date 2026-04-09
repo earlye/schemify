@@ -1,9 +1,9 @@
 module github.com/earlye/schemify/go/schemify
 
-go 1.26.0
+go 1.26.1
 
 require (
-	github.com/earlye/sensitive-strings/golang/ss v0.0.1
+	github.com/earlye/sensitive-strings/golang/ss v0.0.2
 	github.com/go-errors/errors v1.5.1
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/valkdb/postgresparser v1.1.4

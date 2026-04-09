@@ -245,16 +245,29 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 			}
 		}
 
-		// Primary key: any mismatch on an existing table is a destructive change.
-		// This includes: desired has a different PK, desired has no PK but live DB does (implicit drop),
-		// or desired has a PK but live DB has none.
-		if !constraintPKEqual(have.PrimaryKey, want.PrimaryKey) {
-			detail := describePKDrift(have.PrimaryKey, want.PrimaryKey)
+		// Primary key: adding a PK when the DB has none is additive (ALTER ADD PRIMARY KEY).
+		// Dropping or changing an existing PK is destructive.
+		if have.PrimaryKey == nil && want.PrimaryKey != nil {
+			pk := *want.PrimaryKey
+			migrations = append(migrations, Migration{
+				Kind:       "add_constraint",
+				Schema:     want.Schema,
+				Table:      want.Name,
+				PrimaryKey: &pk,
+			})
+		} else if have.PrimaryKey != nil && want.PrimaryKey == nil {
 			disallowed = append(disallowed, DestructiveChange{
 				Kind:   "primary_key_mismatch",
 				Schema: want.Schema,
 				Table:  want.Name,
-				Detail: detail,
+				Detail: describePKDrift(have.PrimaryKey, want.PrimaryKey),
+			})
+		} else if !constraintPKEqual(have.PrimaryKey, want.PrimaryKey) {
+			disallowed = append(disallowed, DestructiveChange{
+				Kind:   "primary_key_mismatch",
+				Schema: want.Schema,
+				Table:  want.Name,
+				Detail: describePKDrift(have.PrimaryKey, want.PrimaryKey),
 			})
 		}
 		for _, u := range want.UniqueKeys {

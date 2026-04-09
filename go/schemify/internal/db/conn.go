@@ -24,7 +24,7 @@ type Config struct {
 }
 
 func (c *Config) DSN() (result ss.SensitiveString, err error) {
-	if c.Host == "" || c.User.Value() == "" || c.Database == "" || c.Password.Value() == "" {
+	if c.Host == "" || c.User.PlainText() == "" || c.Database == "" || c.Password.PlainText() == "" {
 		err = errors.Errorf("schema: missing required DB_* env (need DB_HOST, DB_USER, DB_NAME, DB_PASSWORD)")
 		return
 	}
@@ -51,12 +51,12 @@ func (c *Config) DSN() (result ss.SensitiveString, err error) {
 	)
 	u := &url.URL{
 		Scheme:   "postgres",
-		User:     url.UserPassword(c.User.Value(), c.Password.Value()),
+		User:     url.UserPassword(c.User.PlainText(), c.Password.PlainText()),
 		Host:     c.Host + ":" + c.Port,
 		Path:     "/" + c.Database,
 		RawQuery: q.Encode(),
 	}
-	result = *ss.New(u.String()) // TODO: update sensitive string to have a SetPlaintext method.
+	result = ss.New(u.String())
 	return
 }
 
@@ -66,7 +66,7 @@ func Connect(ctx context.Context, cfg *Config) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool, err := pgxpool.New(ctx, dsn.Value())
+	pool, err := pgxpool.New(ctx, dsn.PlainText())
 	if err != nil {
 		return nil, errors.WrapPrefix(err, "pgxpool.New failed", 0)
 	}
