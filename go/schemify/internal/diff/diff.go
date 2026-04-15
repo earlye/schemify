@@ -2,11 +2,26 @@ package diff
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/earlye/schemify/go/schemify/internal/schema"
 )
+
+// indexColTypeCastRE matches PostgreSQL type cast annotations added by pg_get_indexdef
+// (e.g. 'kind'::text). These are not present in the source SQL written by the user.
+var indexColTypeCastRE = regexp.MustCompile(`::(?:[a-zA-Z_]\w*(?:\s+[a-zA-Z_]\w*)*)`)
+
+// normalizeIndexColumn canonicalizes an index column string for comparison.
+// It removes whitespace and PostgreSQL-added type cast annotations so that
+// the parser's raw text (e.g. "(channel->>'kind')") matches the canonical
+// form returned by pg_get_indexdef (e.g. "(channel ->> 'kind'::text)").
+func normalizeIndexColumn(col string) string {
+	col = strings.Join(strings.Fields(col), "")
+	col = indexColTypeCastRE.ReplaceAllString(col, "")
+	return col
+}
 
 // TablesMatchForDrop returns true if actual and expected have the same columns (name + type).
 // Order does not matter. Used to allow drop only when the directive's column list matches the DB.
@@ -139,7 +154,7 @@ func IndexMatches(actual, desired *schema.Index) bool {
 		return false
 	}
 	for i := range actual.Columns {
-		if actual.Columns[i] != desired.Columns[i] {
+		if normalizeIndexColumn(actual.Columns[i]) != normalizeIndexColumn(desired.Columns[i]) {
 			return false
 		}
 	}

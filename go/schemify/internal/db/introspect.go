@@ -284,12 +284,16 @@ func listConstraints(ctx context.Context, pool *pgxpool.Pool, schemaName string,
 func listIndexes(ctx context.Context, pool *pgxpool.Pool, schemaName string) (map[string]*schema.Index, error) {
 	// pg_index: indkey is int2vector of attnums; use generate_subscripts to get column names in order.
 	// Exclude constraint-backing indexes by filtering out those referenced in pg_constraint.
+	// pg_get_indexdef(indexrelid, column_no, pretty) returns each column's definition:
+	// a plain column name for regular columns, or the expression text for expression columns.
+	// This correctly handles expression indexes (e.g. CREATE INDEX ... ON t ((col->>'key')))
+	// where indkey stores attnum=0 for expression positions, which the old pg_attribute JOIN
+	// (with attnum > 0 filter) silently excluded.
 	rows, err := pool.Query(ctx, `
 		SELECT n.nspname, c.relname AS indexname, t.relname AS tablename, tn.nspname AS tableschema,
 		       i.indisunique, am.amname AS indextype,
-		       (SELECT array_agg(a.attname ORDER BY ord)
-		        FROM generate_subscripts(i.indkey, 1) AS ord
-		        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = (i.indkey)[ord] AND a.attnum > 0 AND NOT a.attisdropped) AS columns
+		       (SELECT array_agg(pg_get_indexdef(i.indexrelid, ord::int, false) ORDER BY ord)
+		        FROM generate_subscripts(i.indkey, 1) AS ord) AS columns
 		FROM pg_index i
 		JOIN pg_class c ON c.oid = i.indexrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
