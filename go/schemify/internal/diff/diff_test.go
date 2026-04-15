@@ -296,6 +296,53 @@ func TestDiff_Index_DropIndex_Destructive(t *testing.T) {
 	}
 }
 
+// TestDiff_JSONB_ExpressionIndex_SecondRunIdempotent simulates a second schemify run against a
+// database that already has an expression index. The desired index (from the SQL file) carries the
+// raw parser text "(doc->>'kind')" for the expression column. The actual index (from
+// pg_get_indexdef introspection) carries the PostgreSQL canonical form "(doc ->> 'kind'::text)".
+// IndexMatches must normalize both sides so they compare equal; otherwise schemify would generate
+// a spurious create_index migration on every run.
+func TestDiff_JSONB_ExpressionIndex_SecondRunIdempotent(t *testing.T) {
+	tables := map[string]*schema.Table{
+		"public.key_doc": {
+			Schema:  "public",
+			Name:    "key_doc",
+			Columns: []schema.Column{{Name: "key", Type: "text"}, {Name: "doc", Type: "jsonb"}},
+		},
+	}
+	// What the parser extracts from the SQL file (raw source text).
+	desiredIdx := map[string]*schema.Index{
+		"public.idx_key_doc_key_kind": {
+			Name: "idx_key_doc_key_kind", Schema: "public",
+			TableSchema: "public", TableName: "key_doc",
+			Columns:      []string{"key", "(doc->>'kind')"},
+			Unique:       false,
+			IndexType:    "btree",
+			Concurrently: true,
+		},
+	}
+	// What pg_get_indexdef returns after the index is created: PostgreSQL adds whitespace and
+	// type casts (::text) to string literals in expression columns.
+	actualIdx := map[string]*schema.Index{
+		"public.idx_key_doc_key_kind": {
+			Name: "idx_key_doc_key_kind", Schema: "public",
+			TableSchema: "public", TableName: "key_doc",
+			Columns:      []string{"key", "(doc ->> 'kind'::text)"},
+			Unique:       false,
+			IndexType:    "btree",
+			Concurrently: true,
+		},
+	}
+
+	add, dest := Diff(tables, tables, desiredIdx, actualIdx, nil)
+	if len(dest) != 0 {
+		t.Errorf("expected no destructive changes on second run, got %v", dest)
+	}
+	if len(add) != 0 {
+		t.Errorf("expected no additive migrations on second run (index already exists), got %v", add)
+	}
+}
+
 func TestDiff_DropColumn_TypeMismatch_StillDestructive(t *testing.T) {
 	desired := map[string]*schema.Table{
 		"public.a": {

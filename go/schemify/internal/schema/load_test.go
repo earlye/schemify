@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+
 func TestLoadFromDir(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.sql", "CREATE TABLE public.users (id integer, username character varying(255));")
@@ -256,5 +257,125 @@ func TestExtractDropTableBlockDefs_NoClosingLine_Skipped(t *testing.T) {
 	defs := extractDropTableBlockDefs(raw)
 	if len(defs) != 0 {
 		t.Errorf("expected 0 defs when block has no closing -- ); got %v", defs)
+	}
+}
+
+// TestParseDDL_JSONB_TableWithCheckConstraint verifies that a CREATE TABLE with a jsonb column
+// and a CHECK constraint using ->> and -> operators parses without error and yields correct columns.
+func TestParseDDL_JSONB_TableWithCheckConstraint(t *testing.T) {
+	sql := `CREATE TABLE public.key_docs (
+    key   text   NOT NULL,
+    doc jsonb  NOT NULL,
+    CONSTRAINT key_docs_doc_kind_check CHECK (
+        (doc->>'kind') IN ('text', 'pdf', 'json') AND
+        (doc->'value') IS NOT NULL
+    )
+);`
+	tables, indexes, err := parseDDL(sql)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(indexes) != 0 {
+		t.Errorf("expected 0 indexes, got %d", len(indexes))
+	}
+	if len(tables) != 1 {
+		t.Fatalf("expected 1 table, got %d", len(tables))
+	}
+	tbl := tables[0]
+	if tbl.Schema != "public" || tbl.Name != "key_docs" {
+		t.Errorf("table: schema=%q name=%q", tbl.Schema, tbl.Name)
+	}
+	if len(tbl.Columns) != 2 {
+		t.Fatalf("expected 2 columns, got %d: %v", len(tbl.Columns), tbl.Columns)
+	}
+	if tbl.Columns[0].Name != "key" || tbl.Columns[0].Type != "text" {
+		t.Errorf("col0: %+v", tbl.Columns[0])
+	}
+	if tbl.Columns[1].Name != "doc" || tbl.Columns[1].Type != "jsonb" {
+		t.Errorf("col1: %+v", tbl.Columns[1])
+	}
+}
+
+// TestParseDDL_JSONB_ExpressionIndex verifies that a CREATE INDEX CONCURRENTLY IF NOT EXISTS
+// with an expression column using the ->> operator parses without error, returns 2 columns,
+// and preserves the ->> operator literally (no unicode escaping of '>').
+func TestParseDDL_JSONB_ExpressionIndex(t *testing.T) {
+	sql := `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_key_docs_key_kind ON public.key_docs (key, (doc->>'kind'));`
+	_, indexes, err := parseDDL(sql)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(indexes) != 1 {
+		t.Fatalf("expected 1 index, got %d", len(indexes))
+	}
+	idx := indexes[0]
+	if idx.Name != "idx_key_docs_key_kind" {
+		t.Errorf("unexpected index name: %q", idx.Name)
+	}
+	if idx.TableName != "key_docs" || idx.TableSchema != "public" {
+		t.Errorf("index table: schema=%q name=%q", idx.TableSchema, idx.TableName)
+	}
+	// The index has 2 columns: "key" and the expression "(doc->>'kind')".
+	if len(idx.Columns) != 2 {
+		t.Fatalf("expected 2 columns (key + expression), got %d: %v", len(idx.Columns), idx.Columns)
+	}
+	if idx.Columns[0] != "key" {
+		t.Errorf("col[0]: expected %q, got %q", "key", idx.Columns[0])
+	}
+	// Verify the expression column preserves the ->> operator without unicode escaping.
+	expr := idx.Columns[1]
+	if strings.Contains(expr, `\u003e`) || strings.Contains(expr, `%3E`) {
+		t.Errorf("column expression contains unicode-escaped '>': %q", expr)
+	}
+	if !strings.Contains(expr, "->>") {
+		t.Errorf("column expression should contain '->>' operator, got: %q", expr)
+	}
+}
+
+// TestLoadFromFS_JSONB_FullSchema verifies that the complete user-supplied schema
+// (two tables, two indexes, jsonb column, check constraint, expression index, IF NOT EXISTS)
+// loads without any file being silently skipped due to a parse error.
+func TestLoadFromFS_JSONB_FullSchema(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "key_docs.sql", `-- Maps keys to delivery docs.
+CREATE TABLE public.key_docs (
+    key   text   NOT NULL,
+    doc jsonb  NOT NULL,
+    CONSTRAINT key_docs_doc_kind_check CHECK (
+        (doc->>'kind') IN ('text', 'pdf', 'json') AND
+        (doc->'value') IS NOT NULL
+    )
+);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_key_docs_key ON public.key_docs (key);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_key_docs_key_kind ON public.key_docs (key, (doc->>'kind'));
+`)
+	writeFile(t, dir, "environment_overrides.sql", `CREATE TABLE public.environment_overrides (
+    envkey  text NOT NULL,
+    envvalue text NOT NULL,
+    PRIMARY KEY(envkey)
+);
+`)
+	got, err := LoadFromFS(os.DirFS(dir))
+	if err != nil {
+		t.Fatalf("LoadFromFS error: %v", err)
+	}
+	if len(got.Tables) != 2 {
+		t.Errorf("expected 2 tables, got %d: %v", len(got.Tables), got.Tables)
+	}
+	if _, ok := got.Tables["public.key_docs"]; !ok {
+		t.Error("missing public.key_docs (file may have been silently skipped due to parse error)")
+	}
+	if _, ok := got.Tables["public.environment_overrides"]; !ok {
+		t.Error("missing public.environment_overrides")
+	}
+	if len(got.Indexes) != 2 {
+		t.Errorf("expected 2 indexes, got %d: %v", len(got.Indexes), got.Indexes)
+	}
+	if _, ok := got.Indexes["public.idx_key_docs_key"]; !ok {
+		t.Error("missing public.idx_key_docs_key")
+	}
+	if _, ok := got.Indexes["public.idx_key_docs_key_kind"]; !ok {
+		t.Error("missing public.idx_key_docs_key_kind")
 	}
 }
