@@ -292,7 +292,7 @@ func listIndexes(ctx context.Context, pool *pgxpool.Pool, schemaName string) (ma
 	rows, err := pool.Query(ctx, `
 		SELECT n.nspname, c.relname AS indexname, t.relname AS tablename, tn.nspname AS tableschema,
 		       i.indisunique, am.amname AS indextype,
-		       (SELECT array_agg(pg_get_indexdef(i.indexrelid, ord::int, false) ORDER BY ord)
+		       (SELECT array_agg(pg_get_indexdef(i.indexrelid, (ord + 1)::int, false) ORDER BY ord)
 		        FROM generate_subscripts(i.indkey, 1) AS ord) AS columns
 		FROM pg_index i
 		JOIN pg_class c ON c.oid = i.indexrelid

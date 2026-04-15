@@ -14,13 +14,44 @@ import (
 var indexColTypeCastRE = regexp.MustCompile(`::(?:[a-zA-Z_]\w*(?:\s+[a-zA-Z_]\w*)*)`)
 
 // normalizeIndexColumn canonicalizes an index column string for comparison.
-// It removes whitespace and PostgreSQL-added type cast annotations so that
-// the parser's raw text (e.g. "(channel->>'kind')") matches the canonical
-// form returned by pg_get_indexdef (e.g. "(channel ->> 'kind'::text)").
+// It removes whitespace, PostgreSQL-added type cast annotations, and strips
+// matching outer parentheses so that the parser's raw text (e.g. "(channel->>'kind')")
+// matches pg_get_indexdef output which may wrap expressions in extra parens
+// (e.g. PostgreSQL 18 returns "((channel ->> 'kind'::text))").
 func normalizeIndexColumn(col string) string {
 	col = strings.Join(strings.Fields(col), "")
 	col = indexColTypeCastRE.ReplaceAllString(col, "")
-	return col
+	for {
+		stripped, ok := stripOuterParens(col)
+		if !ok {
+			break
+		}
+		col = stripped
+	}
+	return strings.ToLower(col)
+}
+
+// stripOuterParens removes one layer of outer parentheses if the opening paren
+// at index 0 matches the closing paren at the last index. Returns the stripped
+// string and true, or the original string and false if no strip was done.
+func stripOuterParens(s string) (string, bool) {
+	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		return s, false
+	}
+	// Walk the string; if depth reaches 0 before the last char, the first '('
+	// closes before the end, meaning the outer parens are not a matched pair.
+	depth := 0
+	for i := 0; i < len(s)-1; i++ {
+		if s[i] == '(' {
+			depth++
+		} else if s[i] == ')' {
+			depth--
+			if depth == 0 {
+				return s, false
+			}
+		}
+	}
+	return s[1 : len(s)-1], true
 }
 
 // TablesMatchForDrop returns true if actual and expected have the same columns (name + type).

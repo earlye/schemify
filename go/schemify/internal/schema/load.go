@@ -222,7 +222,7 @@ func parseDDL(sql string) ([]*Table, []*Index, error) {
 			case postgresparser.DDLCreateTable:
 				t := &Table{
 					Schema:           action.Schema,
-					Name:             action.ObjectName,
+					Name:             strings.ToLower(action.ObjectName),
 					Columns:          make([]Column, 0, len(action.ColumnDetails)),
 					AllowDropColumns: allowDrops,
 				}
@@ -298,10 +298,10 @@ func parseDDL(sql string) ([]*Table, []*Index, error) {
 					}
 				}
 				indexes = append(indexes, &Index{
-					Name:         action.ObjectName,
+					Name:         strings.ToLower(action.ObjectName),
 					Schema:       idxSchema,
-					TableSchema:  tbl.Schema,
-					TableName:    tbl.Name,
+					TableSchema:  strings.ToLower(tbl.Schema),
+					TableName:    strings.ToLower(tbl.Name),
 					Columns:      append([]string(nil), action.Columns...),
 					Unique:       unique,
 					IndexType:    idxType,

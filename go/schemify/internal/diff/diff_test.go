@@ -321,13 +321,14 @@ func TestDiff_JSONB_ExpressionIndex_SecondRunIdempotent(t *testing.T) {
 			Concurrently: true,
 		},
 	}
-	// What pg_get_indexdef returns after the index is created: PostgreSQL adds whitespace and
-	// type casts (::text) to string literals in expression columns.
+	// What pg_get_indexdef returns after the index is created: PostgreSQL adds whitespace,
+	// type casts (::text), and wraps expressions in an extra layer of parentheses.
+	// PostgreSQL 18+ returns "((doc ->> 'kind'::text))" (double parens).
 	actualIdx := map[string]*schema.Index{
 		"public.idx_key_doc_key_kind": {
 			Name: "idx_key_doc_key_kind", Schema: "public",
 			TableSchema: "public", TableName: "key_doc",
-			Columns:      []string{"key", "(doc ->> 'kind'::text)"},
+			Columns:      []string{"key", "((doc ->> 'kind'::text))"},
 			Unique:       false,
 			IndexType:    "btree",
 			Concurrently: true,

@@ -86,3 +86,7 @@ apply-v04-override: up build
 .PHONY: apply-v05
 apply-v05: up build
 	./bin/schemify -s ./schemas/demo-v05 -v
+
+.PHONY: apply-broken
+apply-broken: up build
+	./bin/schemify -s ./schemas/demo-broken -v
