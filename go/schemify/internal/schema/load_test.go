@@ -335,6 +335,33 @@ func TestParseDDL_JSONB_ExpressionIndex(t *testing.T) {
 // TestLoadFromFS_JSONB_FullSchema verifies that the complete user-supplied schema
 // (two tables, two indexes, jsonb column, check constraint, expression index, IF NOT EXISTS)
 // loads without any file being silently skipped due to a parse error.
+// TestParseDDL_ColumnNameCaseNormalized verifies that column and constraint column names are
+// normalized to lowercase at parse time. PostgreSQL stores unquoted identifiers in lowercase,
+// so a SQL file using mixed-case names like "myKey" must produce "mykey" to match introspection.
+func TestParseDDL_ColumnNameCaseNormalized(t *testing.T) {
+	sql := `CREATE TABLE public.t (myKey text, PRIMARY KEY (myKey));`
+	tables, _, err := parseDDL(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tables) != 1 {
+		t.Fatalf("expected 1 table, got %d", len(tables))
+	}
+	tbl := tables[0]
+	if len(tbl.Columns) != 1 {
+		t.Fatalf("expected 1 column, got %d", len(tbl.Columns))
+	}
+	if tbl.Columns[0].Name != "mykey" {
+		t.Errorf("column name: expected %q, got %q", "mykey", tbl.Columns[0].Name)
+	}
+	if tbl.PrimaryKey == nil {
+		t.Fatal("expected PrimaryKey to be set")
+	}
+	if len(tbl.PrimaryKey.Columns) != 1 || tbl.PrimaryKey.Columns[0] != "mykey" {
+		t.Errorf("PK columns: expected [%q], got %v", "mykey", tbl.PrimaryKey.Columns)
+	}
+}
+
 func TestLoadFromFS_JSONB_FullSchema(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "key_docs.sql", `-- Maps keys to delivery docs.
@@ -350,10 +377,10 @@ CREATE TABLE public.key_docs (
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_key_docs_key ON public.key_docs (key);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_key_docs_key_kind ON public.key_docs (key, (doc->>'kind'));
 `)
-	writeFile(t, dir, "environment_overrides.sql", `CREATE TABLE public.environment_overrides (
-    envkey  text NOT NULL,
-    envvalue text NOT NULL,
-    PRIMARY KEY(envkey)
+	writeFile(t, dir, "key_value.sql", `CREATE TABLE public.key_value (
+    key   text NOT NULL,
+    value text NOT NULL,
+    PRIMARY KEY(key)
 );
 `)
 	got, err := LoadFromFS(os.DirFS(dir))
@@ -366,8 +393,8 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_key_docs_key_kind ON public.key_docs
 	if _, ok := got.Tables["public.key_docs"]; !ok {
 		t.Error("missing public.key_docs (file may have been silently skipped due to parse error)")
 	}
-	if _, ok := got.Tables["public.environment_overrides"]; !ok {
-		t.Error("missing public.environment_overrides")
+	if _, ok := got.Tables["public.key_value"]; !ok {
+		t.Error("missing public.key_value")
 	}
 	if len(got.Indexes) != 2 {
 		t.Errorf("expected 2 indexes, got %d: %v", len(got.Indexes), got.Indexes)

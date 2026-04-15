@@ -231,7 +231,7 @@ func parseDDL(sql string) ([]*Table, []*Index, error) {
 				}
 				for _, c := range action.ColumnDetails {
 					t.Columns = append(t.Columns, Column{
-						Name:     c.Name,
+						Name:     strings.ToLower(c.Name),
 						Type:     normalizeType(c.Type),
 						Nullable: c.Nullable,
 						Default:  c.Default,
@@ -241,22 +241,22 @@ func parseDDL(sql string) ([]*Table, []*Index, error) {
 					if action.Constraints.PrimaryKey != nil {
 						t.PrimaryKey = &PrimaryKeyConstraint{
 							Name:    action.Constraints.PrimaryKey.ConstraintName,
-							Columns: append([]string(nil), action.Constraints.PrimaryKey.Columns...),
+							Columns: lowerAll(action.Constraints.PrimaryKey.Columns),
 						}
 					}
 					for _, u := range action.Constraints.UniqueKeys {
 						t.UniqueKeys = append(t.UniqueKeys, UniqueConstraint{
 							Name:    u.ConstraintName,
-							Columns: append([]string(nil), u.Columns...),
+							Columns: lowerAll(u.Columns),
 						})
 					}
 					for _, fk := range action.Constraints.ForeignKeys {
 						t.ForeignKeys = append(t.ForeignKeys, ForeignKey{
 							Name:              fk.ConstraintName,
-							Columns:           append([]string(nil), fk.Columns...),
+							Columns:           lowerAll(fk.Columns),
 							ReferencesSchema:  fk.ReferencesSchema,
 							ReferencesTable:   fk.ReferencesTable,
-							ReferencesColumns: append([]string(nil), fk.ReferencesColumns...),
+							ReferencesColumns: lowerAll(fk.ReferencesColumns),
 							OnDelete:          string(fk.OnDelete),
 							OnUpdate:          string(fk.OnUpdate),
 						})
@@ -311,6 +311,15 @@ func parseDDL(sql string) ([]*Table, []*Index, error) {
 		}
 	}
 	return tables, indexes, nil
+}
+
+// lowerAll returns a new slice with each element lowercased.
+func lowerAll(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = strings.ToLower(s)
+	}
+	return out
 }
 
 // normalizeType canonicalizes PostgreSQL type names for comparison with information_schema.

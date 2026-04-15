@@ -148,7 +148,7 @@ func createIndexSQL(idx *schema.Index) string {
 	if idx.IndexType != "" && idx.IndexType != "btree" {
 		using = " USING " + idx.IndexType
 	}
-	return fmt.Sprintf("CREATE %sINDEX CONCURRENTLY %s ON %s.%s (%s)%s", qual, idx.Name, idx.TableSchema, idx.TableName, strings.Join(idx.Columns, ", "), using)
+	return fmt.Sprintf("CREATE %sINDEX CONCURRENTLY IF NOT EXISTS %s ON %s.%s (%s)%s", qual, idx.Name, idx.TableSchema, idx.TableName, strings.Join(idx.Columns, ", "), using)
 }
 
 func addConstraintSQL(schemaName, tableName string, m diff.Migration) string {

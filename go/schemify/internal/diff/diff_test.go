@@ -343,6 +343,44 @@ func TestDiff_JSONB_ExpressionIndex_SecondRunIdempotent(t *testing.T) {
 	}
 }
 
+// TestDiff_ColumnNameCaseInsensitive ensures that a desired schema using mixed-case column names
+// (e.g. "myKey") is treated as identical to the DB which returns lowercase names (e.g. "mykey").
+// This simulates the contract that parseDDL normalizes names to lowercase before Diff sees them.
+func TestDiff_ColumnNameCaseInsensitive(t *testing.T) {
+	// Desired: normalized by parseDDL from the SQL file's mixed-case names (myKey -> mykey).
+	// Actual: what the DB returns via information_schema (always lowercase).
+	// Both reach Diff already lowercased; this test documents that contract.
+	desired := map[string]*schema.Table{
+		"public.key_value": {
+			Schema: "public",
+			Name:   "key_value",
+			Columns: []schema.Column{
+				{Name: "mykey", Type: "text"},
+				{Name: "myvalue", Type: "text"},
+			},
+			PrimaryKey: &schema.PrimaryKeyConstraint{Columns: []string{"mykey"}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.key_value": {
+			Schema: "public",
+			Name:   "key_value",
+			Columns: []schema.Column{
+				{Name: "mykey", Type: "text"},
+				{Name: "myvalue", Type: "text"},
+			},
+			PrimaryKey: &schema.PrimaryKeyConstraint{Columns: []string{"mykey"}},
+		},
+	}
+	add, dest := Diff(desired, actual, nil, nil, nil)
+	if len(add) != 0 {
+		t.Errorf("expected no additive migrations, got %v", add)
+	}
+	if len(dest) != 0 {
+		t.Errorf("expected no destructive changes, got %v", dest)
+	}
+}
+
 func TestDiff_DropColumn_TypeMismatch_StillDestructive(t *testing.T) {
 	desired := map[string]*schema.Table{
 		"public.a": {
