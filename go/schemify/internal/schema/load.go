@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/valkdb/postgresparser"
+	"github.com/earlye/postgresparser"
 )
 
 // LoadResult holds the result of LoadFromDir (tables and indexes).

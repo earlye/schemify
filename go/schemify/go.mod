@@ -4,10 +4,10 @@ go 1.26.1
 
 require (
 	github.com/earlye/eaux/go/log v0.0.10
+	github.com/earlye/postgresparser v0.0.3
 	github.com/earlye/sensitive-strings/golang/ss v0.0.2
 	github.com/go-errors/errors v1.5.1
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/valkdb/postgresparser v1.1.4
 )
 
 require (
