@@ -6,6 +6,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/earlye/eaux/go/types v0.0.1 h1:vpYragiFM19k6rZg6UZLV5Z6rSuov471OcIQOQmcgVs=
 github.com/earlye/eaux/go/types v0.0.1/go.mod h1:O4/1A908k+vAYdZ+6ddeovQjwbDvp89sXRUWcE1ATxM=
+github.com/earlye/postgresparser v0.0.3 h1:uHPevSc1tz/0RyqZ9ZlRTe6dkIvS0oL509nnV5FWowQ=
+github.com/earlye/postgresparser v0.0.3/go.mod h1:sYEWfdM4oc+YRpUdtqT3bGuZzosv2BFE5hL6f1JIxeM=
 github.com/earlye/sensitive-strings/golang/ss v0.0.2 h1:FRoPHIi+Jt18nZfQrcfHDd8aRok+nAxJPrpf+uLejJ0=
 github.com/earlye/sensitive-strings/golang/ss v0.0.2/go.mod h1:OJosU8dg6MiZUw5cliOggYe7O11w0JJOMAjyhBR7AT0=
 github.com/go-errors/errors v1.5.1 h1:ZwEMSLRCapFLflTpT7NKaAc7ukJ8ZPEjzlxt8rPN8bk=
@@ -32,8 +34,6 @@ github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UV
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/valkdb/postgresparser v1.1.4 h1:FFTdELOfMKs2xS/B8+g0iaz+F3UAygB3r1bL2+kSeDM=
-github.com/valkdb/postgresparser v1.1.4/go.mod h1:ZLdOJbyhChgvx3QpbYKR8VPpUMVG3pHNv+2pS8T2uXQ=
 go.yaml.in/yaml/v3 v3.0.4/go.mod h1:DhzuOOF2ATzADvBadXxruRBLzYTpT36CKvDb3+aBEFg=
 golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 h1:vr/HnozRka3pE4EsMEg1lgkXJkTFJCVUX+S/ZT6wYzM=
 golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842/go.mod h1:XtvwrStGgqGPLc4cjQfWqZHG1YFdYs6swckp8vpsjnc=

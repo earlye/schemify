@@ -362,6 +362,46 @@ func TestParseDDL_ColumnNameCaseNormalized(t *testing.T) {
 	}
 }
 
+// TestParseDDL_JSONB_QuestionMarkCheckConstraint verifies that the JSONB ? operator
+// inside a DDL CHECK constraint does not cause the parser to silently drop subsequent
+// statements — the regression from valkdb/postgresparser DDL vs DML grammar coverage.
+func TestParseDDL_JSONB_QuestionMarkCheckConstraint(t *testing.T) {
+	sql := `CREATE TABLE public.owners_channels (
+    owner   text   NOT NULL,
+    channel jsonb  NOT NULL,
+    CONSTRAINT owners_channels_channel_kind_check CHECK (
+        channel ? 'kind' AND channel ? 'value' AND (channel->>'kind') IN ('PD', 'DD', 'Slack', 'Fail')
+    )
+);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_owners_channels_owner ON public.owners_channels (owner);
+
+CREATE TABLE public.environment_overrides (
+    envKey   text NOT NULL,
+    envValue text NOT NULL,
+    PRIMARY KEY (envKey)
+);`
+	tables, indexes, err := parseDDL(sql)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(tables) != 2 {
+		t.Fatalf("expected 2 tables, got %d — statements after ? operator may have been silently dropped", len(tables))
+	}
+	if len(indexes) != 1 {
+		t.Fatalf("expected 1 index, got %d — statements after ? operator may have been silently dropped", len(indexes))
+	}
+	if tables[0].Name != "owners_channels" {
+		t.Errorf("table[0]: expected owners_channels, got %q", tables[0].Name)
+	}
+	if tables[1].Name != "environment_overrides" {
+		t.Errorf("table[1]: expected environment_overrides, got %q", tables[1].Name)
+	}
+	if indexes[0].Name != "idx_owners_channels_owner" {
+		t.Errorf("index: expected idx_owners_channels_owner, got %q", indexes[0].Name)
+	}
+}
+
 func TestLoadFromFS_JSONB_FullSchema(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "key_docs.sql", `-- Maps keys to delivery docs.
