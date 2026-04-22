@@ -20,7 +20,7 @@ type Options struct {
 // Apply runs the additive migrations. create_index (CONCURRENTLY) runs outside a transaction;
 // all other migrations run in a single transaction (unless DryRun).
 // If DryRun is true, SQL is returned as a string and no changes are made.
-func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration, opts Options) (err error) {
+func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration, opts Options) error {
 	if opts.DryRun {
 		for _, m := range migrations {
 			sql, err := migrationSQL(m)
@@ -35,7 +35,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 	// Split: create_index must run outside transaction (CONCURRENTLY); rest in one tx.
 	var inTx, outTx []diff.Migration
 	for _, m := range migrations {
-		if m.Kind == "create_index" {
+		if m.Kind == diff.KindCreateIndex {
 			outTx = append(outTx, m)
 		} else {
 			inTx = append(inTx, m)
@@ -47,11 +47,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 		if err != nil {
 			return errors.WrapPrefix(err, "begin transaction", 0)
 		}
-		defer func() {
-			if err != nil {
-				_ = tx.Rollback(ctx)
-			}
-		}()
+		defer tx.Rollback(ctx) //nolint:errcheck
 
 		for _, m := range inTx {
 			sql, err := migrationSQL(m)
@@ -83,21 +79,25 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 }
 
 func migrationSQL(m diff.Migration) (string, error) {
-	switch m.Kind {
-	case "create_table":
-		return createTableSQL(m.TableDef), nil
-	case "add_column":
-		return addColumnSQL(m.Schema, m.Table, m.Column), nil
-	case "drop_column":
-		return dropColumnSQL(m.Schema, m.Table, m.Column.Name), nil
-	case "drop_table":
+	switch d := m.Detail.(type) {
+	case *diff.CreateTableDetail:
+		return createTableSQL(d.TableDef), nil
+	case *diff.AddColumnDetail:
+		return addColumnSQL(m.Schema, m.Table, d.Column), nil
+	case *diff.DropColumnDetail:
+		return dropColumnSQL(m.Schema, m.Table, d.ColumnName), nil
+	case *diff.DropTableDetail:
 		return dropTableSQL(m.Schema, m.Table), nil
-	case "create_index":
-		return createIndexSQL(m.Index), nil
-	case "add_constraint":
-		return addConstraintSQL(m.Schema, m.Table, m), nil
+	case *diff.CreateIndexDetail:
+		return createIndexSQL(d.Index), nil
+	case *diff.AddPKDetail:
+		return addPKSQL(m.Schema, m.Table, d.PrimaryKey), nil
+	case *diff.AddUniqueDetail:
+		return addUniqueSQL(m.Schema, m.Table, d.UniqueKey), nil
+	case *diff.AddFKDetail:
+		return addFKSQL(m.Schema, m.Table, d.ForeignKey), nil
 	default:
-		return "", fmt.Errorf("unknown migration kind: %s", m.Kind)
+		return "", fmt.Errorf("unknown migration detail: %T", m.Detail)
 	}
 }
 
@@ -151,33 +151,35 @@ func createIndexSQL(idx *schema.Index) string {
 	return fmt.Sprintf("CREATE %sINDEX CONCURRENTLY IF NOT EXISTS %s ON %s.%s (%s)%s", qual, idx.Name, idx.TableSchema, idx.TableName, strings.Join(idx.Columns, ", "), using)
 }
 
-func addConstraintSQL(schemaName, tableName string, m diff.Migration) string {
-	if m.PrimaryKey != nil {
-		return fmt.Sprintf("ALTER TABLE %s.%s ADD PRIMARY KEY (%s)", schemaName, tableName, strings.Join(m.PrimaryKey.Columns, ", "))
+func addPKSQL(schemaName, tableName string, pk *schema.PrimaryKeyConstraint) string {
+	return fmt.Sprintf("ALTER TABLE %s.%s ADD PRIMARY KEY (%s)", schemaName, tableName, strings.Join(pk.Columns, ", "))
+}
+
+func addUniqueSQL(schemaName, tableName string, u *schema.UniqueConstraint) string {
+	name := u.Name
+	if name == "" {
+		name = "unique_" + tableName + "_" + strings.Join(u.Columns, "_")
 	}
-	if m.UniqueKey != nil {
-		name := m.UniqueKey.Name
-		if name == "" {
-			name = "unique_" + tableName + "_" + strings.Join(m.UniqueKey.Columns, "_")
-		}
-		return fmt.Sprintf("ALTER TABLE %s.%s ADD CONSTRAINT %s UNIQUE (%s)", schemaName, tableName, name, strings.Join(m.UniqueKey.Columns, ", "))
+	return fmt.Sprintf("ALTER TABLE %s.%s ADD CONSTRAINT %s UNIQUE (%s)", schemaName, tableName, name, strings.Join(u.Columns, ", "))
+}
+
+func addFKSQL(schemaName, tableName string, fk *schema.ForeignKey) string {
+	name := fk.Name
+	if name == "" {
+		name = "fk_" + tableName + "_" + strings.Join(fk.Columns, "_")
 	}
-	if m.ForeignKey != nil {
-		fk := m.ForeignKey
-		ref := fmt.Sprintf("%s.%s", fk.ReferencesSchema, fk.ReferencesTable)
-		if fk.ReferencesSchema == "" {
-			ref = fk.ReferencesTable
-		}
-		s := fmt.Sprintf("ALTER TABLE %s.%s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)", schemaName, tableName, fk.Name, strings.Join(fk.Columns, ", "), ref, strings.Join(fk.ReferencesColumns, ", "))
-		if fk.OnDelete != "" && fk.OnDelete != "NO ACTION" {
-			s += " ON DELETE " + fk.OnDelete
-		}
-		if fk.OnUpdate != "" && fk.OnUpdate != "NO ACTION" {
-			s += " ON UPDATE " + fk.OnUpdate
-		}
-		return s
+	ref := fmt.Sprintf("%s.%s", fk.ReferencesSchema, fk.ReferencesTable)
+	if fk.ReferencesSchema == "" {
+		ref = fk.ReferencesTable
 	}
-	return ""
+	s := fmt.Sprintf("ALTER TABLE %s.%s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)", schemaName, tableName, name, strings.Join(fk.Columns, ", "), ref, strings.Join(fk.ReferencesColumns, ", "))
+	if fk.OnDelete != "" && fk.OnDelete != "NO ACTION" {
+		s += " ON DELETE " + fk.OnDelete
+	}
+	if fk.OnUpdate != "" && fk.OnUpdate != "NO ACTION" {
+		s += " ON UPDATE " + fk.OnUpdate
+	}
+	return s
 }
 
 func addColumnSQL(schema, table string, c *schema.Column) string {

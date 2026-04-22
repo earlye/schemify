@@ -47,7 +47,8 @@ func TestDiff_AddColumn(t *testing.T) {
 	if len(add) != 1 {
 		t.Fatalf("expected 1 additive, got %d", len(add))
 	}
-	if add[0].Kind != "add_column" || add[0].Column.Name != "name" {
+	d, ok := add[0].Detail.(*AddColumnDetail)
+	if add[0].Kind != KindAddColumn || !ok || d.Column.Name != "name" {
 		t.Errorf("add[0]: %+v", add[0])
 	}
 }
@@ -181,7 +182,8 @@ func TestDiff_DropColumn_AllowedByTypeMatch(t *testing.T) {
 	if len(add) != 1 {
 		t.Fatalf("expected 1 additive (drop_column), got %d", len(add))
 	}
-	if add[0].Kind != "drop_column" || add[0].Column.Name != "name" {
+	d, ok := add[0].Detail.(*DropColumnDetail)
+	if add[0].Kind != KindDropColumn || !ok || d.ColumnName != "name" {
 		t.Errorf("add[0]: %+v", add[0])
 	}
 }
@@ -207,7 +209,8 @@ func TestDiff_DropColumn_AllowedByAnyType(t *testing.T) {
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive, got %v", dest)
 	}
-	if len(add) != 1 || add[0].Kind != "drop_column" || add[0].Column.Name != "name" {
+	d, ok := add[0].Detail.(*DropColumnDetail)
+	if len(add) != 1 || add[0].Kind != KindDropColumn || !ok || d.ColumnName != "name" {
 		t.Errorf("expected one drop_column migration, got %v", add)
 	}
 }
@@ -231,7 +234,8 @@ func TestDiff_Index_CreateIndex(t *testing.T) {
 	if len(add) != 1 {
 		t.Fatalf("expected 1 additive (create_index), got %d", len(add))
 	}
-	if add[0].Kind != "create_index" || add[0].Index.Name != "idx_a_x" {
+	d, ok := add[0].Detail.(*CreateIndexDetail)
+	if add[0].Kind != KindCreateIndex || !ok || d.Index.Name != "idx_a_x" {
 		t.Errorf("add[0]: %+v", add[0])
 	}
 }
@@ -258,17 +262,21 @@ func TestDiff_AddConstraint_PrimaryKey(t *testing.T) {
 		t.Fatalf("expected no destructive, got %v", dest)
 	}
 	var addConstraint *Migration
+	var pkDetail *AddPKDetail
 	for i := range add {
-		if add[i].Kind == "add_constraint" && add[i].PrimaryKey != nil {
-			addConstraint = &add[i]
-			break
+		if add[i].Kind == KindAddPK {
+			if d, ok := add[i].Detail.(*AddPKDetail); ok {
+				addConstraint = &add[i]
+				pkDetail = d
+				break
+			}
 		}
 	}
 	if addConstraint == nil {
-		t.Fatalf("expected one add_constraint (primary key), got %v", add)
+		t.Fatalf("expected one add_primary_key migration, got %v", add)
 	}
-	if addConstraint.Table != "a" || len(addConstraint.PrimaryKey.Columns) != 1 || addConstraint.PrimaryKey.Columns[0] != "id" {
-		t.Errorf("add_constraint: %+v", addConstraint)
+	if addConstraint.Table != "a" || len(pkDetail.PrimaryKey.Columns) != 1 || pkDetail.PrimaryKey.Columns[0] != "id" {
+		t.Errorf("add_primary_key: %+v", addConstraint)
 	}
 }
 

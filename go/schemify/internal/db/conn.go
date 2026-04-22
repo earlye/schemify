@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"net/url"
 
+	logging "github.com/earlye/eaux/go/log"
 	ss "github.com/earlye/sensitive-strings/golang/ss"
 	"github.com/go-errors/errors"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/tracelog"
 )
 
 // Config holds connection parameters.
@@ -21,6 +23,32 @@ type Config struct {
 	SSLRootCert string
 	SSLCert     string
 	SSLKey      string
+}
+
+type pgxSlogTracer struct{}
+
+func (t *pgxSlogTracer) Log(ctx context.Context, level tracelog.LogLevel, msg string, data map[string]any) {
+	attrs := make([]any, 0, len(data)*2)
+	for k, v := range data {
+		attrs = append(attrs, k, v)
+	}
+	slogLevel := pgxLevelToSlog(level)
+	slog.Default().Log(ctx, slogLevel, "pgx: "+msg, attrs...)
+}
+
+func pgxLevelToSlog(level tracelog.LogLevel) slog.Level {
+	switch level {
+	case tracelog.LogLevelTrace:
+		return logging.LevelTrace
+	case tracelog.LogLevelDebug:
+		return slog.LevelDebug
+	case tracelog.LogLevelInfo:
+		return slog.LevelInfo
+	case tracelog.LogLevelWarn:
+		return slog.LevelWarn
+	default:
+		return slog.LevelError
+	}
 }
 
 func (c *Config) DSN() (result ss.SensitiveString, err error) {
@@ -60,15 +88,23 @@ func (c *Config) DSN() (result ss.SensitiveString, err error) {
 	return
 }
 
-// Connect creates a connection pool.
+// Connect creates a connection pool with pgx trace logging wired into slog.
 func Connect(ctx context.Context, cfg *Config) (*pgxpool.Pool, error) {
 	dsn, err := cfg.DSN()
 	if err != nil {
 		return nil, err
 	}
-	pool, err := pgxpool.New(ctx, dsn.PlainText())
+	config, err := pgxpool.ParseConfig(dsn.PlainText())
 	if err != nil {
-		return nil, errors.WrapPrefix(err, "pgxpool.New failed", 0)
+		return nil, errors.WrapPrefix(err, "pgxpool.ParseConfig failed", 0)
+	}
+	config.ConnConfig.Tracer = &tracelog.TraceLog{
+		Logger:   &pgxSlogTracer{},
+		LogLevel: tracelog.LogLevelTrace,
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, errors.WrapPrefix(err, "pgxpool.NewWithConfig failed", 0)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()

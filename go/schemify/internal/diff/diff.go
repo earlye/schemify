@@ -80,19 +80,46 @@ func TablesMatchForDrop(actual, expected *schema.Table) bool {
 	return true
 }
 
+// MigrationDetail is a sealed interface; only the Detail types in this package implement it.
+type MigrationDetail interface{ migrationDetail() }
+
+// Kind constants for Migration.Kind.
+const (
+	KindCreateTable = "create_table"
+	KindAddColumn   = "add_column"
+	KindDropColumn  = "drop_column"
+	KindDropTable   = "drop_table"
+	KindCreateIndex = "create_index"
+	KindAddPK       = "add_primary_key"
+	KindAddUnique   = "add_unique_key"
+	KindAddFK       = "add_foreign_key"
+)
+
+// Detail types — one per Kind.
+type CreateTableDetail struct{ TableDef *schema.Table }
+type AddColumnDetail struct{ Column *schema.Column }
+type DropColumnDetail struct{ ColumnName string }
+type DropTableDetail struct{}
+type CreateIndexDetail struct{ Index *schema.Index }
+type AddPKDetail struct{ PrimaryKey *schema.PrimaryKeyConstraint }
+type AddUniqueDetail struct{ UniqueKey *schema.UniqueConstraint }
+type AddFKDetail struct{ ForeignKey *schema.ForeignKey }
+
+func (*CreateTableDetail) migrationDetail() {}
+func (*AddColumnDetail) migrationDetail()   {}
+func (*DropColumnDetail) migrationDetail()  {}
+func (*DropTableDetail) migrationDetail()   {}
+func (*CreateIndexDetail) migrationDetail() {}
+func (*AddPKDetail) migrationDetail()       {}
+func (*AddUniqueDetail) migrationDetail()   {}
+func (*AddFKDetail) migrationDetail()       {}
+
 // Migration represents a single change to apply (additive or allowed destructive).
-// TODO: migrate this to be a discriminated union so it can be marshaled to JSON/YAML/SQL/etc.
 type Migration struct {
-	Kind     string         // "create_table", "add_column", "drop_column", "drop_table", "create_index", "add_constraint"
-	Schema   string         // e.g. "public"
-	Table    string         // table name
-	TableDef *schema.Table  // for create_table: full definition
-	Column   *schema.Column // for add_column: the column to add; for drop_column: Name only
-	Index    *schema.Index  // for create_index
-	// For add_constraint: exactly one of PrimaryKey, UniqueKey, ForeignKey is set.
-	PrimaryKey *schema.PrimaryKeyConstraint
-	UniqueKey  *schema.UniqueConstraint
-	ForeignKey *schema.ForeignKey
+	Kind   string          // one of the Kind* constants
+	Schema string          // e.g. "public"
+	Table  string          // table name
+	Detail MigrationDetail // concrete type determined by Kind
 }
 
 // DestructiveChange represents a change we refuse to apply (drop table, column, index, or pk mismatch).
@@ -204,9 +231,10 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 			expected := allowDropTableDefs[key]
 			if expected != nil && TablesMatchForDrop(t, expected) {
 				migrations = append(migrations, Migration{
-					Kind:   "drop_table",
+					Kind:   KindDropTable,
 					Schema: t.Schema,
 					Table:  t.Name,
+					Detail: &DropTableDetail{},
 				})
 			} else {
 				dc := DestructiveChange{
@@ -227,10 +255,10 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		have := actual[key]
 		if have == nil {
 			migrations = append(migrations, Migration{
-				Kind:     "create_table",
-				Schema:   want.Schema,
-				Table:    want.Name,
-				TableDef: want,
+				Kind:   KindCreateTable,
+				Schema: want.Schema,
+				Table:  want.Name,
+				Detail: &CreateTableDetail{TableDef: want},
 			})
 			continue
 		}
@@ -267,10 +295,10 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 					continue
 				}
 				migrations = append(migrations, Migration{
-					Kind:   "drop_column",
+					Kind:   KindDropColumn,
 					Schema: want.Schema,
 					Table:  want.Name,
-					Column: &schema.Column{Name: c.Name},
+					Detail: &DropColumnDetail{ColumnName: c.Name},
 				})
 			}
 		}
@@ -283,10 +311,10 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 			c := &want.Columns[i]
 			if !haveCols[c.Name] {
 				migrations = append(migrations, Migration{
-					Kind:   "add_column",
+					Kind:   KindAddColumn,
 					Schema: want.Schema,
 					Table:  want.Name,
-					Column: c,
+					Detail: &AddColumnDetail{Column: c},
 				})
 			}
 		}
@@ -296,10 +324,10 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		if have.PrimaryKey == nil && want.PrimaryKey != nil {
 			pk := *want.PrimaryKey
 			migrations = append(migrations, Migration{
-				Kind:       "add_constraint",
-				Schema:     want.Schema,
-				Table:      want.Name,
-				PrimaryKey: &pk,
+				Kind:   KindAddPK,
+				Schema: want.Schema,
+				Table:  want.Name,
+				Detail: &AddPKDetail{PrimaryKey: &pk},
 			})
 		} else if have.PrimaryKey != nil && want.PrimaryKey == nil {
 			disallowed = append(disallowed, DestructiveChange{
@@ -320,10 +348,10 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 			if !haveUnique(u, have.UniqueKeys) {
 				u2 := u
 				migrations = append(migrations, Migration{
-					Kind:      "add_constraint",
-					Schema:    want.Schema,
-					Table:     want.Name,
-					UniqueKey: &u2,
+					Kind:   KindAddUnique,
+					Schema: want.Schema,
+					Table:  want.Name,
+					Detail: &AddUniqueDetail{UniqueKey: &u2},
 				})
 			}
 		}
@@ -331,10 +359,10 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 			if !haveFK(fk, have.ForeignKeys) {
 				fk2 := fk
 				migrations = append(migrations, Migration{
-					Kind:       "add_constraint",
-					Schema:     want.Schema,
-					Table:      want.Name,
-					ForeignKey: &fk2,
+					Kind:   KindAddFK,
+					Schema: want.Schema,
+					Table:  want.Name,
+					Detail: &AddFKDetail{ForeignKey: &fk2},
 				})
 			}
 		}
@@ -346,10 +374,10 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 			haveIdx := actualIndexes[key]
 			if haveIdx == nil || !IndexMatches(haveIdx, wantIdx) {
 				migrations = append(migrations, Migration{
-					Kind:   "create_index",
+					Kind:   KindCreateIndex,
 					Schema: wantIdx.Schema,
 					Table:  wantIdx.TableName,
-					Index:  wantIdx,
+					Detail: &CreateIndexDetail{Index: wantIdx},
 				})
 			}
 		}
@@ -364,7 +392,102 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		}
 	}
 
+	migrations = topoSortCreateTable(migrations)
 	return migrations, disallowed
+}
+
+// topoSortCreateTable reorders create_table migrations so that tables referenced by FK constraints
+// are created before the tables that reference them. Non-create_table migrations keep their relative
+// positions in the slice. A table that references another schema's table (not in this migration set)
+// is treated as having no dependency on it. Cycles are left in place (PostgreSQL will error).
+func topoSortCreateTable(migrations []Migration) []Migration {
+	// Collect positions and details of create_table migrations.
+	type entry struct {
+		pos    int
+		schema string
+		table  string
+		m      Migration
+	}
+	var creates []entry
+	createPos := map[string]int{} // "schema.table" -> index into creates
+	for i, m := range migrations {
+		if m.Kind == KindCreateTable {
+			key := m.Schema + "." + m.Table
+			createPos[key] = len(creates)
+			creates = append(creates, entry{pos: i, schema: m.Schema, table: m.Table, m: m})
+		}
+	}
+	if len(creates) == 0 {
+		return migrations
+	}
+
+	// Build adjacency: deps[i] = set of create indices that i depends on.
+	n := len(creates)
+	inDegree := make([]int, n)
+	adj := make([][]int, n) // adj[dep] -> list of nodes that depend on dep
+	for i, e := range creates {
+		d, ok := e.m.Detail.(*CreateTableDetail)
+		if !ok {
+			continue
+		}
+		for _, fk := range d.TableDef.ForeignKeys {
+			ref := fk.ReferencesSchema + "." + fk.ReferencesTable
+			if depIdx, found := createPos[ref]; found && depIdx != i {
+				adj[depIdx] = append(adj[depIdx], i)
+				inDegree[i]++
+			}
+		}
+	}
+
+	// Kahn's algorithm.
+	var queue []int
+	for i := 0; i < n; i++ {
+		if inDegree[i] == 0 {
+			queue = append(queue, i)
+		}
+	}
+	sorted := make([]Migration, 0, n)
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		sorted = append(sorted, creates[cur].m)
+		for _, next := range adj[cur] {
+			inDegree[next]--
+			if inDegree[next] == 0 {
+				queue = append(queue, next)
+			}
+		}
+	}
+	// Append any remaining (cycle members) in original order.
+	if len(sorted) < n {
+		inSorted := make(map[int]bool)
+		for i, m := range sorted {
+			_ = i
+			for j, e := range creates {
+				if e.m.Schema == m.Schema && e.m.Table == m.Table {
+					inSorted[j] = true
+					break
+				}
+			}
+		}
+		for i, e := range creates {
+			if !inSorted[i] {
+				sorted = append(sorted, e.m)
+			}
+		}
+	}
+
+	// Replace create_table slots in the original slice with the sorted order.
+	result := make([]Migration, len(migrations))
+	copy(result, migrations)
+	si := 0
+	for i := range result {
+		if result[i].Kind == KindCreateTable {
+			result[i] = sorted[si]
+			si++
+		}
+	}
+	return result
 }
 
 func describePKDrift(actual, desired *schema.PrimaryKeyConstraint) string {

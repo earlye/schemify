@@ -3,6 +3,7 @@ module github.com/earlye/schemify/go
 go 1.26.1
 
 require (
+	github.com/earlye/eaux/go/cobra/slogx v0.0.3
 	github.com/earlye/eaux/go/types v0.0.1
 	github.com/earlye/schemify/go/schemify v0.0.0
 	github.com/go-errors/errors v1.5.1
@@ -13,6 +14,8 @@ replace github.com/earlye/schemify/go/schemify => ./schemify
 
 require (
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+	github.com/earlye/eaux/go/env v0.0.3 // indirect
+	github.com/earlye/eaux/go/log v0.0.10 // indirect
 	github.com/earlye/sensitive-strings/golang/ss v0.0.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect

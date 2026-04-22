@@ -4,6 +4,12 @@ github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6N
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/earlye/eaux/go/cobra/slogx v0.0.3 h1:riaxBxGKKk578L1LJ1pyBobWXa3TMc8BxHFS2j7UFr8=
+github.com/earlye/eaux/go/cobra/slogx v0.0.3/go.mod h1:7L7YsPM03SNco9FReJSKWHRG44/mMhIVBqbmpeskkHI=
+github.com/earlye/eaux/go/env v0.0.3 h1:gda8v9LNpR0MJr15rJZC3NzDgqtiBVrUt+aEmwWYKNg=
+github.com/earlye/eaux/go/env v0.0.3/go.mod h1:Y1bTMFAdKQuTkkNgluotdZI/bVIA56ADM4F1xt3nGpg=
+github.com/earlye/eaux/go/log v0.0.10 h1:uHnITngTpe6GdRn8V+pg9Ef4ebSgv4IRLqNxA0syaf4=
+github.com/earlye/eaux/go/log v0.0.10/go.mod h1:5oB0V6ZQm394zLiAurA6+pmn5ra2jpJYpa2SD8dyULw=
 github.com/earlye/eaux/go/types v0.0.1 h1:vpYragiFM19k6rZg6UZLV5Z6rSuov471OcIQOQmcgVs=
 github.com/earlye/eaux/go/types v0.0.1/go.mod h1:O4/1A908k+vAYdZ+6ddeovQjwbDvp89sXRUWcE1ATxM=
 github.com/earlye/sensitive-strings/golang/ss v0.0.2 h1:FRoPHIi+Jt18nZfQrcfHDd8aRok+nAxJPrpf+uLejJ0=

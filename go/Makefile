@@ -1,5 +1,7 @@
 export DB_SSLMODE=disable
 GOFILES=$(shell find . -name "*.go")
+SHELL=/bin/bash -euo pipefail
+DECOLOR:=$(shell ./decolor.sh)
 
 .PHONY: all
 all: bin/schemify
@@ -24,13 +26,32 @@ bin/:
 
 .PHONY: test
 test: up
-	go test ./...
-	cd schemify && go test ./...
+	rm -f .coverage.*
+	$(MAKE) .coverage.html
+
+.uncover:
+	go install github.com/gregoryv/uncover/cmd/uncover@b56b18c8233ef7a454eed0c045ecf19b30da36dd
+	touch $@
+
+.coverage.html: .coverage.out
+	go tool cover -html=.coverage.out -o $(abspath $@)
+
+.PHONY: view-coverage
+view-coverage: .coverage.html
+	open $(abspath $<)
+
+.coverage.out: .coverage.out.tmp .uncover
+	./munge-coverage.sh
+	$(HOME)/go/bin/uncover -min 5.0 .coverage.out | $(DECOLOR)
+
+.coverage.out.tmp: $(GOFILES) | up
+	cd schemify && go test -v ./... -count=1 -coverprofile=$(abspath .coverage.out.tmp) | sed "s/^coverage:/coverage :/g"
 
 .PHONY: clean
 clean:
 	rm -rf bin
 	rm -f .dependencies
+	rm -f .coverage.*
 
 .PHONY: nuke
 nuke: clean docker-nuke
@@ -90,3 +111,11 @@ apply-v05: up build
 .PHONY: apply-broken
 apply-broken: up build
 	./bin/schemify -s ./schemas/demo-broken -v
+
+.PHONY: apply-constraints-00
+apply-constraints-00: up build
+	./bin/schemify -s ./schemas/demo-constraints-00 -v
+
+.PHONY: apply-constraints-01
+apply-constraints-01: up build
+	timeout 30 ./bin/schemify -s ./schemas/demo-constraints-01 -v=TRACE

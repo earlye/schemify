@@ -1,3 +1,4 @@
+/// coverage-ignore
 package main
 
 import (
@@ -6,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 
+	cobralogx "github.com/earlye/eaux/go/cobra/slogx"
 	"github.com/earlye/eaux/go/types"
 	"github.com/earlye/schemify/go/schemify"
 	"github.com/go-errors/errors"
@@ -30,9 +32,16 @@ var rootCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
-var verbose bool
 
 func init() {
+	cobralogx.AddPersistentFlags(rootCmd, cobralogx.CobraOptions{
+		VerbosityDefault: "INFO",
+		LogFormatDefault: "text",
+	})
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		return cobralogx.SlogPreRunE(cmd, args, cobralogx.SlogOptions{})
+	}
+
 	rootCmd.PersistentFlags().StringVarP(&options.Database.Host, "host", "H", envOrDefault("DB_HOST", "localhost"), "database host")
 	rootCmd.PersistentFlags().StringVarP(&options.Database.Port, "port", "p", envOrDefault("DB_PORT", "5432"), "database port")
 	rootCmd.PersistentFlags().StringVarP(options.Database.User.PValue(), "user", "U", envOrDefault("DB_USER", "schemify"), "database user")
@@ -44,7 +53,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&options.Database.SSLKey, "ssl-key", "K", envOrDefault("DB_SSLKEY", ""), "database SSL key")
 	rootCmd.PersistentFlags().StringVarP(&schemaDir, "schema", "s", envOrDefault("SCHEMA_DIR", "./schemas/demo-v01"), "directory containing *.sql schema files")
 	rootCmd.PersistentFlags().BoolVarP(&options.ApplyOptions.DryRun, "dry-run", "n", false, "print SQL only, do not apply")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 }
 
 func envOrDefault(key, def string) string {
@@ -55,14 +63,6 @@ func envOrDefault(key, def string) string {
 }
 
 func run(cmd *cobra.Command, args []string) error {
-	level := slog.LevelInfo
-	if verbose {
-		level = slog.LevelDebug
-	}
-	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
-
 	options.Schema = os.DirFS(schemaDir)
 	err := schemify.Run(context.Background(), &options)
 	if err != nil {

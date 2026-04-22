@@ -3,6 +3,8 @@ github.com/antlr4-go/antlr/v4 v4.13.1/go.mod h1:GKmUxMtwp6ZgGwZSva4eWPC5mS6vUAmO
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/earlye/eaux/go/log v0.0.10 h1:uHnITngTpe6GdRn8V+pg9Ef4ebSgv4IRLqNxA0syaf4=
+github.com/earlye/eaux/go/log v0.0.10/go.mod h1:5oB0V6ZQm394zLiAurA6+pmn5ra2jpJYpa2SD8dyULw=
 github.com/earlye/sensitive-strings/golang/ss v0.0.2 h1:FRoPHIi+Jt18nZfQrcfHDd8aRok+nAxJPrpf+uLejJ0=
 github.com/earlye/sensitive-strings/golang/ss v0.0.2/go.mod h1:OJosU8dg6MiZUw5cliOggYe7O11w0JJOMAjyhBR7AT0=
 github.com/go-errors/errors v1.5.1 h1:ZwEMSLRCapFLflTpT7NKaAc7ukJ8ZPEjzlxt8rPN8bk=
