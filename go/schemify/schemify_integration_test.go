@@ -67,6 +67,17 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS schemify_itest_idx_Records_recordKind
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS schemify_itest_idx_Records_recordData_kind
     ON public.schemify_itest_Records ((recordData->>'kind'));
+
+CREATE TABLE public.schemify_itest_channels (
+    owner   text  NOT NULL,
+    channel jsonb NOT NULL,
+    CONSTRAINT schemify_itest_channels_check CHECK (
+        channel ? 'kind' AND channel ? 'value'
+    )
+);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS schemify_itest_idx_channels_owner
+    ON public.schemify_itest_channels (owner);
 `
 
 // TestIntegration_IndexIdempotency verifies that running schemify twice against
@@ -158,6 +169,7 @@ func itestCleanup(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	for _, tbl := range []string{
 		"public.schemify_itest_items",
 		"public.schemify_itest_records",
+		"public.schemify_itest_channels",
 	} {
 		if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS "+tbl); err != nil {
 			t.Logf("cleanup warning: %v", err)
