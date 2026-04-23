@@ -362,6 +362,49 @@ func TestParseDDL_ColumnNameCaseNormalized(t *testing.T) {
 	}
 }
 
+func TestParseDDL_PredictsNamesForUnnamedUniqueAndForeignKey(t *testing.T) {
+	sql := `CREATE TABLE public.parent (
+    id integer PRIMARY KEY,
+    code text UNIQUE
+);
+CREATE TABLE public.child (
+    id integer PRIMARY KEY,
+    parent_code text REFERENCES public.parent (code)
+);`
+	tables, _, err := parseDDL(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tables) != 2 {
+		t.Fatalf("expected 2 tables, got %d", len(tables))
+	}
+
+	var parent, child *Table
+	for _, tbl := range tables {
+		switch tbl.Name {
+		case "parent":
+			parent = tbl
+		case "child":
+			child = tbl
+		}
+	}
+	if parent == nil || child == nil {
+		t.Fatalf("expected parent/child tables, got %+v", tables)
+	}
+	if len(parent.UniqueKeys) != 1 {
+		t.Fatalf("expected 1 unique key on parent, got %d", len(parent.UniqueKeys))
+	}
+	if parent.UniqueKeys[0].Name != "parent_code_key" {
+		t.Fatalf("expected predicted unique name parent_code_key, got %q", parent.UniqueKeys[0].Name)
+	}
+	if len(child.ForeignKeys) != 1 {
+		t.Fatalf("expected 1 foreign key on child, got %d", len(child.ForeignKeys))
+	}
+	if child.ForeignKeys[0].Name != "child_parent_code_fkey" {
+		t.Fatalf("expected predicted FK name child_parent_code_fkey, got %q", child.ForeignKeys[0].Name)
+	}
+}
+
 // TestParseDDL_JSONB_QuestionMarkCheckConstraint verifies that the JSONB ? operator
 // inside a DDL CHECK constraint does not cause the parser to silently drop subsequent
 // statements — the regression from valkdb/postgresparser DDL vs DML grammar coverage.

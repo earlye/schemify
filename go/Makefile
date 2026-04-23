@@ -1,4 +1,5 @@
 export DB_SSLMODE=disable
+export DB_PORT=5433
 GOFILES=$(shell find . -name "*.go")
 SHELL=/bin/bash -euo pipefail
 DECOLOR:=$(shell ./decolor.sh)
@@ -15,7 +16,7 @@ dependencies: clean
 	go mod tidy
 	touch $@
 
-.PHONY: buildb
+.PHONY: build
 build: bin/schemify $(GOFILES)
 
 bin/schemify: bin/ .dependencies
@@ -58,7 +59,7 @@ nuke: clean docker-nuke
 
 .PHONY: up
 up:
-	docker compose up -d postgres
+	docker compose --progress=plain up -d postgres
 
 .PHONY: down
 down:

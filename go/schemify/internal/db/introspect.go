@@ -3,8 +3,10 @@ package db
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
+	"github.com/earlye/schemify/go/schemify/internal/helpers"
 	"github.com/earlye/schemify/go/schemify/internal/schema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -42,7 +44,11 @@ func Introspect(ctx context.Context, pool *pgxpool.Pool, schemaName string) (*In
 	}
 
 	// Attach constraints to tables.
-	if err := listConstraints(ctx, pool, schemaName, tablesOut); err != nil {
+	if err := listPrimaryOrUniqueConstraints(ctx, pool, schemaName, tablesOut); err != nil {
+		return nil, err
+	}
+
+	if err := listForeignKeys(ctx, pool, schemaName, tablesOut); err != nil {
 		return nil, err
 	}
 
@@ -147,8 +153,7 @@ func typeLengthSuffix(t string) string {
 	return t[i:]
 }
 
-// listConstraints populates PrimaryKey, UniqueKeys, ForeignKeys on each table in tables.
-func listConstraints(ctx context.Context, pool *pgxpool.Pool, schemaName string, tables map[string]*schema.Table) error {
+func listPrimaryOrUniqueConstraints(ctx context.Context, pool *pgxpool.Pool, schemaName string, tables map[string]*schema.Table) error {
 	// Primary keys and unique constraints: table_constraints + key_column_usage for column order.
 	rows, err := pool.Query(ctx, `
 		SELECT tc.constraint_name, tc.constraint_type, tc.table_name, kcu.column_name, kcu.ordinal_position
@@ -190,10 +195,19 @@ func listConstraints(ctx context.Context, pool *pgxpool.Pool, schemaName string,
 	for k, cols := range uniqueCols {
 		tblKey := tableKey(schemaName, k.table)
 		if t := tables[tblKey]; t != nil {
-			t.UniqueKeys = append(t.UniqueKeys, schema.UniqueConstraint{Name: k.name, Columns: cols})
+			name := k.name
+			if name == "" {
+				name = helpers.PredictedUniqueConstraintName(k.table, cols)
+			}
+			t.UniqueKeys = append(t.UniqueKeys, schema.UniqueConstraint{Name: name, Columns: cols})
 		}
 	}
+	return nil
+}
 
+func listForeignKeys(ctx context.Context, pool *pgxpool.Pool, schemaName string, tables map[string]*schema.Table) error {
+	slog.Debug("finding foreign keys")
+	defer slog.Debug("done finding foreign keys")
 	// Foreign keys: key_column_usage for local columns (ordered); join to ref constraint's key_column_usage for ref columns in order.
 	rows2, err := pool.Query(ctx, `
 		SELECT tc.table_name, tc.constraint_name, kcu.column_name, kcu.ordinal_position,
@@ -228,8 +242,10 @@ func listConstraints(ctx context.Context, pool *pgxpool.Pool, schemaName string,
 		var delRule, upRule string
 		var rs, rt, rc string
 		if err := rows2.Scan(&tname, &cname, &col, &ord, &ucs, &ucn, &delRule, &upRule, &rs, &rt, &rc); err != nil {
+			slog.Error("Couldn't scan row", "err", err)
 			return err
 		}
+		slog.Debug("scanned row", "tname", tname , "cname", cname, "ord", ord, "ucs", ucs , "ucn", ucn, "delRule", delRule, "upRule", upRule, "rs", rs , "rt", rt , "rc", rc)
 		if tname != curTable || cname != curCname {
 			if curTable != "" {
 				fkData[fkKey{curTable, curCname}] = struct {
@@ -249,6 +265,7 @@ func listConstraints(ctx context.Context, pool *pgxpool.Pool, schemaName string,
 			refCols = append(refCols, rc)
 		}
 	}
+	slog.Debug("curTable", "curTable", curTable)
 	if curTable != "" {
 		fkData[fkKey{curTable, curCname}] = struct {
 			cols               []string
@@ -259,13 +276,18 @@ func listConstraints(ctx context.Context, pool *pgxpool.Pool, schemaName string,
 		}{cols, refSchema, refTable, refCols, onDel, onUpd}
 	}
 	if err := rows2.Err(); err != nil {
+		slog.Error("Error reading db", "err", err)
 		return err
 	}
 	for k, d := range fkData {
 		tblKey := tableKey(schemaName, k.table)
 		if t := tables[tblKey]; t != nil {
+			name := k.cname
+			if name == "" {
+				name = helpers.PredictedForeignKeyConstraintName(k.table, d.cols)
+			}
 			t.ForeignKeys = append(t.ForeignKeys, schema.ForeignKey{
-				Name:              k.cname,
+				Name:              name,
 				Columns:           d.cols,
 				ReferencesSchema:  d.refSchema,
 				ReferencesTable:   d.refTable,
@@ -273,6 +295,7 @@ func listConstraints(ctx context.Context, pool *pgxpool.Pool, schemaName string,
 				OnDelete:          d.onDelete,
 				OnUpdate:          d.onUpdate,
 			})
+			slog.Debug("Appended foreign key", "t", t)
 		}
 	}
 	return nil

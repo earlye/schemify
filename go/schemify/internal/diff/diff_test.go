@@ -280,6 +280,304 @@ func TestDiff_AddConstraint_PrimaryKey(t *testing.T) {
 	}
 }
 
+func TestDiff_HaveUnique_UnnamedConstraint_MatchesIntrospectionName(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.users": {
+			Schema:  "public",
+			Name:    "users",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "email", Type: "text"}},
+			UniqueKeys: []schema.UniqueConstraint{
+				// Desired schema loader predicts names for unnamed constraints.
+				{Name: "users_email_key", Columns: []string{"email"}},
+			},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.users": {
+			Schema:  "public",
+			Name:    "users",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "email", Type: "text"}},
+			UniqueKeys: []schema.UniqueConstraint{
+				{Name: "users_email_key", Columns: []string{"email"}},
+			},
+		},
+	}
+
+	add, dest := Diff(desired, actual, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive changes, got %v", dest)
+	}
+	for _, m := range add {
+		if m.Kind == KindAddUnique {
+			t.Fatalf("expected no add_unique_key migration, got %v", add)
+		}
+	}
+}
+
+func TestDiff_HaveFK_UnnamedConstraint_MatchesIntrospectionName(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.categories": {
+			Schema:  "public",
+			Name:    "categories",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}},
+		},
+		"public.questions": {
+			Schema:  "public",
+			Name:    "questions",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "category_id", Type: "integer"}},
+			ForeignKeys: []schema.ForeignKey{
+				{
+					// Desired schema loader predicts names for unnamed constraints.
+					Name:              "questions_category_id_fkey",
+					Columns:           []string{"category_id"},
+					ReferencesSchema:  "public",
+					ReferencesTable:   "categories",
+					ReferencesColumns: []string{"id"},
+				},
+			},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.categories": {
+			Schema:  "public",
+			Name:    "categories",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}},
+		},
+		"public.questions": {
+			Schema:  "public",
+			Name:    "questions",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "category_id", Type: "integer"}},
+			ForeignKeys: []schema.ForeignKey{
+				{
+					Name:              "questions_category_id_fkey",
+					Columns:           []string{"category_id"},
+					ReferencesSchema:  "public",
+					ReferencesTable:   "categories",
+					ReferencesColumns: []string{"id"},
+				},
+			},
+		},
+	}
+
+	add, dest := Diff(desired, actual, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive changes, got %v", dest)
+	}
+	for _, m := range add {
+		if m.Kind == KindAddFK {
+			t.Fatalf("expected no add_foreign_key migration, got %v", add)
+		}
+	}
+}
+
+func TestDiff_ExtraUniqueInActual_Destructive(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.users": {
+			Schema:     "public",
+			Name:       "users",
+			Columns:    []schema.Column{{Name: "id", Type: "integer"}, {Name: "email", Type: "text"}},
+			UniqueKeys: []schema.UniqueConstraint{{Name: "users_email_key", Columns: []string{"email"}}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.users": {
+			Schema:  "public",
+			Name:    "users",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "email", Type: "text"}},
+			UniqueKeys: []schema.UniqueConstraint{
+				{Name: "users_email_key", Columns: []string{"email"}},
+				{Name: "users_id_unique", Columns: []string{"id"}},
+			},
+		},
+	}
+
+	add, dest := Diff(desired, actual, nil, nil, nil)
+	if len(add) != 0 {
+		t.Fatalf("expected no additive migrations, got %v", add)
+	}
+	if len(dest) != 1 || dest[0].Kind != "drop_unique_key" || dest[0].Name != "users_id_unique" {
+		t.Fatalf("expected one drop_unique_key for users_id_unique, got %v", dest)
+	}
+}
+
+func TestDiff_ExtraForeignKeyInActual_Destructive(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.categories": {
+			Schema:  "public",
+			Name:    "categories",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}},
+		},
+		"public.questions": {
+			Schema:  "public",
+			Name:    "questions",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "category_id", Type: "integer"}},
+			ForeignKeys: []schema.ForeignKey{
+				{
+					Name:              "questions_category_id_fkey",
+					Columns:           []string{"category_id"},
+					ReferencesSchema:  "public",
+					ReferencesTable:   "categories",
+					ReferencesColumns: []string{"id"},
+				},
+			},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.categories": {
+			Schema:  "public",
+			Name:    "categories",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}},
+		},
+		"public.questions": {
+			Schema:  "public",
+			Name:    "questions",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "category_id", Type: "integer"}},
+			ForeignKeys: []schema.ForeignKey{
+				{
+					Name:              "questions_category_id_extra_fkey",
+					Columns:           []string{"category_id"},
+					ReferencesSchema:  "public",
+					ReferencesTable:   "categories",
+					ReferencesColumns: []string{"id"},
+				},
+				{
+					Name:              "questions_category_id_fkey",
+					Columns:           []string{"category_id"},
+					ReferencesSchema:  "public",
+					ReferencesTable:   "categories",
+					ReferencesColumns: []string{"id"},
+				},
+			},
+		},
+	}
+
+	add, dest := Diff(desired, actual, nil, nil, nil)
+	if len(add) != 0 {
+		t.Fatalf("expected no additive migrations, got %v", add)
+	}
+	if len(dest) != 1 || dest[0].Kind != "drop_foreign_key" || dest[0].Name != "questions_category_id_extra_fkey" {
+		t.Fatalf("expected one drop_foreign_key for questions_category_id_extra_fkey, got %v", dest)
+	}
+}
+
+func TestDiff_EmptyConstraintNamesPanic(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.users": {
+			Schema:  "public",
+			Name:    "users",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "email", Type: "text"}},
+			UniqueKeys: []schema.UniqueConstraint{
+				{Name: "", Columns: []string{"email"}},
+			},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.users": {
+			Schema:  "public",
+			Name:    "users",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "email", Type: "text"}},
+			UniqueKeys: []schema.UniqueConstraint{
+				{Name: "users_email_key", Columns: []string{"email"}},
+			},
+		},
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for empty unique constraint name")
+		}
+	}()
+	Diff(desired, actual, nil, nil, nil)
+}
+
+func TestDiff_HaveUnique_NamedConstraint_StillMatches(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.users": {
+			Schema:  "public",
+			Name:    "users",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "email", Type: "text"}},
+			UniqueKeys: []schema.UniqueConstraint{
+				{Name: "users_email_unique", Columns: []string{"email"}},
+			},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.users": {
+			Schema:  "public",
+			Name:    "users",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "email", Type: "text"}},
+			UniqueKeys: []schema.UniqueConstraint{
+				{Name: "users_email_unique", Columns: []string{"email"}},
+			},
+		},
+	}
+
+	add, dest := Diff(desired, actual, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive changes, got %v", dest)
+	}
+	for _, m := range add {
+		if m.Kind == KindAddUnique {
+			t.Fatalf("expected no add_unique_key migration, got %v", add)
+		}
+	}
+}
+
+func TestDiff_HaveFK_NamedConstraint_StillMatches(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.categories": {
+			Schema:  "public",
+			Name:    "categories",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}},
+		},
+		"public.questions": {
+			Schema:  "public",
+			Name:    "questions",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "category_id", Type: "integer"}},
+			ForeignKeys: []schema.ForeignKey{
+				{
+					Name:              "questions_category_fk",
+					Columns:           []string{"category_id"},
+					ReferencesSchema:  "public",
+					ReferencesTable:   "categories",
+					ReferencesColumns: []string{"id"},
+				},
+			},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.categories": {
+			Schema:  "public",
+			Name:    "categories",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}},
+		},
+		"public.questions": {
+			Schema:  "public",
+			Name:    "questions",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "category_id", Type: "integer"}},
+			ForeignKeys: []schema.ForeignKey{
+				{
+					Name:              "questions_category_fk",
+					Columns:           []string{"category_id"},
+					ReferencesSchema:  "public",
+					ReferencesTable:   "categories",
+					ReferencesColumns: []string{"id"},
+				},
+			},
+		},
+	}
+
+	add, dest := Diff(desired, actual, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive changes, got %v", dest)
+	}
+	for _, m := range add {
+		if m.Kind == KindAddFK {
+			t.Fatalf("expected no add_foreign_key migration, got %v", add)
+		}
+	}
+}
+
 func TestDiff_Index_DropIndex_Destructive(t *testing.T) {
 	desiredIdx := map[string]*schema.Index{}
 	actualIdx := map[string]*schema.Index{

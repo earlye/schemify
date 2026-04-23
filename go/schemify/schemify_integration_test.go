@@ -68,6 +68,17 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS schemify_itest_idx_Records_recordKind
 CREATE INDEX CONCURRENTLY IF NOT EXISTS schemify_itest_idx_Records_recordData_kind
     ON public.schemify_itest_Records ((recordData->>'kind'));
 
+CREATE TABLE public.schemify_itest_fk_parent (
+    code text NOT NULL UNIQUE,
+    payload text NOT NULL
+);
+
+CREATE TABLE public.schemify_itest_fk_child (
+    child_id text NOT NULL,
+    parent_code text NOT NULL REFERENCES public.schemify_itest_fk_parent (code),
+    PRIMARY KEY (child_id)
+);
+
 CREATE TABLE public.schemify_itest_channels (
     owner   text  NOT NULL,
     channel jsonb NOT NULL,
@@ -109,6 +120,57 @@ func TestIntegration_IndexIdempotency(t *testing.T) {
 	run2 := itestApply(t, ctx, pool, fsys, "second run")
 	if len(run2) != 0 {
 		t.Errorf("second run: expected no migrations (idempotency), got %d: %v", len(run2), run2)
+	}
+}
+
+func TestIntegration_ExtraConstraintsDetectedAsDestructive(t *testing.T) {
+	ctx := context.Background()
+	pool := itestPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+	itestCleanup(t, ctx, pool)
+	t.Cleanup(func() { itestCleanup(t, ctx, pool) })
+
+	fsys := fstest.MapFS{
+		"schema.sql": &fstest.MapFile{Data: []byte(itestSchemaSQL)},
+	}
+
+	// Apply desired schema first.
+	_ = itestApply(t, ctx, pool, fsys, "baseline")
+
+	// Inject extra constraints that are not in desired schema.
+	if _, err := pool.Exec(ctx, "ALTER TABLE public.schemify_itest_fk_parent ADD CONSTRAINT schemify_itest_fk_parent_payload_unique UNIQUE (payload)"); err != nil {
+		t.Fatalf("add extra unique: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "ALTER TABLE public.schemify_itest_fk_child ADD CONSTRAINT schemify_itest_fk_child_child_id_extra_fk FOREIGN KEY (child_id) REFERENCES public.schemify_itest_fk_parent (code)"); err != nil {
+		t.Fatalf("add extra fk: %v", err)
+	}
+
+	desired, err := schemify.LoadSchema(fsys)
+	if err != nil {
+		t.Fatalf("LoadSchema: %v", err)
+	}
+	actual, err := schemify.Introspect(ctx, pool, "public")
+	if err != nil {
+		t.Fatalf("Introspect: %v", err)
+	}
+	actualTables := itestFilterTables(actual.Tables, itestPrefix)
+	actualIndexes := itestFilterIndexes(actual.Indexes, itestPrefix)
+
+	_, disallowed := schemify.Diff(desired.Tables, actualTables, desired.Indexes, actualIndexes, nil)
+	if len(disallowed) == 0 {
+		t.Fatal("expected destructive drift for extra constraints, got none")
+	}
+	var sawDropUnique, sawDropFK bool
+	for _, d := range disallowed {
+		if d.Kind == "drop_unique_key" && d.Name == "schemify_itest_fk_parent_payload_unique" {
+			sawDropUnique = true
+		}
+		if d.Kind == "drop_foreign_key" && d.Name == "schemify_itest_fk_child_child_id_extra_fk" {
+			sawDropFK = true
+		}
+	}
+	if !sawDropUnique || !sawDropFK {
+		t.Fatalf("expected drop_unique_key and drop_foreign_key for injected constraints, got %v", disallowed)
 	}
 }
 
@@ -169,6 +231,8 @@ func itestCleanup(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	for _, tbl := range []string{
 		"public.schemify_itest_items",
 		"public.schemify_itest_records",
+		"public.schemify_itest_fk_child",
+		"public.schemify_itest_fk_parent",
 		"public.schemify_itest_channels",
 	} {
 		if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS "+tbl); err != nil {

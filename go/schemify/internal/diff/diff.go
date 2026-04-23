@@ -129,6 +129,7 @@ type DestructiveChange struct {
 	Table  string
 	Column string // only for drop_column
 	Index  string // only for drop_index
+	Name   string // only for named constraints
 	Detail string // optional; e.g. column drift when drop_table rejected, or pk drift description
 }
 
@@ -144,6 +145,10 @@ func (d DestructiveChange) String() string {
 		return fmt.Sprintf("index %s.%s would be dropped", d.Schema, d.Index)
 	case "drop_column":
 		return fmt.Sprintf("column %s.%s.%s would be dropped", d.Schema, d.Table, d.Column)
+	case "drop_unique_key":
+		return fmt.Sprintf("unique constraint %s.%s.%s would be dropped", d.Schema, d.Table, d.Name)
+	case "drop_foreign_key":
+		return fmt.Sprintf("foreign key %s.%s.%s would be dropped", d.Schema, d.Table, d.Name)
 	case "primary_key_mismatch":
 		s := fmt.Sprintf("table %s.%s primary key would change", d.Schema, d.Table)
 		if d.Detail != "" {
@@ -355,6 +360,16 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 				})
 			}
 		}
+		for _, u := range have.UniqueKeys {
+			if !haveUnique(u, want.UniqueKeys) {
+				disallowed = append(disallowed, DestructiveChange{
+					Kind:   "drop_unique_key",
+					Schema: want.Schema,
+					Table:  want.Name,
+					Name:   u.Name,
+				})
+			}
+		}
 		for _, fk := range want.ForeignKeys {
 			if !haveFK(fk, have.ForeignKeys) {
 				fk2 := fk
@@ -363,6 +378,16 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 					Schema: want.Schema,
 					Table:  want.Name,
 					Detail: &AddFKDetail{ForeignKey: &fk2},
+				})
+			}
+		}
+		for _, fk := range have.ForeignKeys {
+			if !haveFK(fk, want.ForeignKeys) {
+				disallowed = append(disallowed, DestructiveChange{
+					Kind:   "drop_foreign_key",
+					Schema: want.Schema,
+					Table:  want.Name,
+					Name:   fk.Name,
 				})
 			}
 		}
@@ -518,7 +543,13 @@ func constraintPKEqual(a, b *schema.PrimaryKeyConstraint) bool {
 }
 
 func haveUnique(u schema.UniqueConstraint, list []schema.UniqueConstraint) bool {
+	if u.Name == "" {
+		panic("internal invariant violation: unique constraint name is empty")
+	}
 	for _, e := range list {
+		if e.Name == "" {
+			panic("internal invariant violation: unique constraint name is empty")
+		}
 		if e.Name == u.Name && sliceEqual(e.Columns, u.Columns) {
 			return true
 		}
@@ -526,13 +557,36 @@ func haveUnique(u schema.UniqueConstraint, list []schema.UniqueConstraint) bool 
 	return false
 }
 
+// fk is the foreign key from the schema definition, list is from introspection.
 func haveFK(fk schema.ForeignKey, list []schema.ForeignKey) bool {
+	if fk.Name == "" {
+		panic("internal invariant violation: foreign key name is empty")
+	}
 	for _, e := range list {
-		if e.Name == fk.Name && sliceEqual(e.Columns, fk.Columns) && e.ReferencesSchema == fk.ReferencesSchema && e.ReferencesTable == fk.ReferencesTable && sliceEqual(e.ReferencesColumns, fk.ReferencesColumns) {
+		if e.Name == "" {
+			panic("internal invariant violation: foreign key name is empty")
+		}
+		if e.Name == fk.Name &&
+			sliceEqual(e.Columns, fk.Columns) &&
+			e.ReferencesSchema == fk.ReferencesSchema &&
+			e.ReferencesTable == fk.ReferencesTable &&
+			sliceEqual(e.ReferencesColumns, fk.ReferencesColumns) &&
+			fkActionEqual(e.OnDelete, fk.OnDelete) &&
+			fkActionEqual(e.OnUpdate, fk.OnUpdate) {
 			return true
 		}
 	}
 	return false
+}
+
+func fkActionEqual(a, b string) bool {
+	normalize := func(s string) string {
+		if s == "" {
+			return "NO ACTION"
+		}
+		return s
+	}
+	return normalize(a) == normalize(b)
 }
 
 func sliceEqual(a, b []string) bool {

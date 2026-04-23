@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/earlye/schemify/go/schemify/internal/helpers"
 	"github.com/earlye/postgresparser"
 )
 
@@ -245,15 +246,25 @@ func parseDDL(sql string) ([]*Table, []*Index, error) {
 						}
 					}
 					for _, u := range action.Constraints.UniqueKeys {
+						cols := lowerAll(u.Columns)
+						name := u.ConstraintName
+						if name == "" {
+							name = helpers.PredictedUniqueConstraintName(t.Name, cols)
+						}
 						t.UniqueKeys = append(t.UniqueKeys, UniqueConstraint{
-							Name:    u.ConstraintName,
-							Columns: lowerAll(u.Columns),
+							Name:    name,
+							Columns: cols,
 						})
 					}
 					for _, fk := range action.Constraints.ForeignKeys {
+						cols := lowerAll(fk.Columns)
+						name := fk.ConstraintName
+						if name == "" {
+							name = helpers.PredictedForeignKeyConstraintName(t.Name, cols)
+						}
 						t.ForeignKeys = append(t.ForeignKeys, ForeignKey{
-							Name:              fk.ConstraintName,
-							Columns:           lowerAll(fk.Columns),
+							Name:              name,
+							Columns:           cols,
 							ReferencesSchema:  fk.ReferencesSchema,
 							ReferencesTable:   fk.ReferencesTable,
 							ReferencesColumns: lowerAll(fk.ReferencesColumns),

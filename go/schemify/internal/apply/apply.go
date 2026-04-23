@@ -21,14 +21,14 @@ type Options struct {
 // all other migrations run in a single transaction (unless DryRun).
 // If DryRun is true, SQL is returned as a string and no changes are made.
 func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration, opts Options) error {
-	if opts.DryRun {
-		for _, m := range migrations {
-			sql, err := migrationSQL(m)
-			if err != nil {
-				return err
-			}
-			slog.Debug("Would run:", "sql", sql)
+	for _, m := range migrations {
+		sql, err := migrationSQL(m)
+		if err != nil {
+			return err
 		}
+		slog.Debug("Plan", "sql", sql)
+	}
+	if opts.DryRun {
 		return nil
 	}
 
@@ -110,11 +110,21 @@ func createTableSQL(t *schema.Table) string {
 		parts = append(parts, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(t.PrimaryKey.Columns, ", ")))
 	}
 	for _, u := range t.UniqueKeys {
+		if u.Name == "" {
+			panic("internal invariant violation: unique constraint name is empty")
+		}
 		if len(u.Columns) > 0 {
-			parts = append(parts, fmt.Sprintf("UNIQUE (%s)", strings.Join(u.Columns, ", ")))
+			clause := fmt.Sprintf("UNIQUE (%s)", strings.Join(u.Columns, ", "))
+			if u.Name != "" {
+				clause = fmt.Sprintf("CONSTRAINT %s %s", u.Name, clause)
+			}
+			parts = append(parts, clause)
 		}
 	}
 	for _, fk := range t.ForeignKeys {
+		if fk.Name == "" {
+			panic("internal invariant violation: foreign key name is empty")
+		}
 		if len(fk.Columns) > 0 && fk.ReferencesTable != "" {
 			ref := fmt.Sprintf("%s.%s", fk.ReferencesSchema, fk.ReferencesTable)
 			if fk.ReferencesSchema == "" {
@@ -156,23 +166,21 @@ func addPKSQL(schemaName, tableName string, pk *schema.PrimaryKeyConstraint) str
 }
 
 func addUniqueSQL(schemaName, tableName string, u *schema.UniqueConstraint) string {
-	name := u.Name
-	if name == "" {
-		name = "unique_" + tableName + "_" + strings.Join(u.Columns, "_")
+	if u.Name == "" {
+		panic("internal invariant violation: unique constraint name is empty")
 	}
-	return fmt.Sprintf("ALTER TABLE %s.%s ADD CONSTRAINT %s UNIQUE (%s)", schemaName, tableName, name, strings.Join(u.Columns, ", "))
+	return fmt.Sprintf("ALTER TABLE %s.%s ADD CONSTRAINT %s UNIQUE (%s)", schemaName, tableName, u.Name, strings.Join(u.Columns, ", "))
 }
 
 func addFKSQL(schemaName, tableName string, fk *schema.ForeignKey) string {
-	name := fk.Name
-	if name == "" {
-		name = "fk_" + tableName + "_" + strings.Join(fk.Columns, "_")
+	if fk.Name == "" {
+		panic("internal invariant violation: foreign key name is empty")
 	}
 	ref := fmt.Sprintf("%s.%s", fk.ReferencesSchema, fk.ReferencesTable)
 	if fk.ReferencesSchema == "" {
 		ref = fk.ReferencesTable
 	}
-	s := fmt.Sprintf("ALTER TABLE %s.%s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)", schemaName, tableName, name, strings.Join(fk.Columns, ", "), ref, strings.Join(fk.ReferencesColumns, ", "))
+	s := fmt.Sprintf("ALTER TABLE %s.%s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)", schemaName, tableName, fk.Name, strings.Join(fk.Columns, ", "), ref, strings.Join(fk.ReferencesColumns, ", "))
 	if fk.OnDelete != "" && fk.OnDelete != "NO ACTION" {
 		s += " ON DELETE " + fk.OnDelete
 	}
