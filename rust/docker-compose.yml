@@ -1,0 +1,20 @@
+volumes:
+  pg-data:
+
+services:
+  postgres:
+    image: postgres:18
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql
+    environment:
+      POSTGRES_USER: schemify
+      POSTGRES_PASSWORD: schemify
+      POSTGRES_DB: schemify
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U schemify -d schemify"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s

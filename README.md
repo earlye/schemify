@@ -6,7 +6,7 @@ This is different from migration-based tools (Flyway, golang-migrate, etc.): you
 
 ## Implementations
 
-- **[go/](go/)** — Go implementation (CLI and library). Recommended.
-- [Future] [rust/] - Rust implementation is contemplated, but not implemented (yet)
+- **[go/](go/)** — Go implementation (CLI and library).
+- **[rust/](rust/)** — Rust implementation (CLI + library). See [rust/README.md](./rust/README.md).
 
 See [./go/schemify/README.md](./go/schemify/README.md) for supported DDL details.

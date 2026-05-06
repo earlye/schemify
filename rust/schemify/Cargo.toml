@@ -1,0 +1,18 @@
+[package]
+name = "schemify"
+version = "0.1.0"
+edition = "2024"
+description = "Declarative PostgreSQL schema application (additive-first), Rust port"
+license = "MIT"
+rust-version = "1.85"
+
+[dependencies]
+pg_query = "6"
+regex = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio-postgres = "0.7"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

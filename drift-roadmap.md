@@ -13,6 +13,18 @@ This document captures the design direction for **drift management**: explicit, 
 | **Decorated schema** | **Desired model + drift directives** in one place. This is the durable input to **planning** (diff): “what we want” plus “how to treat known classes of mismatch.” |
 | **Anticipated drift model** | Ephemeral parse artifact: a fragment of schema shape the author believes **might still exist** in some deployed databases (used for matching, allowlisting, or validating directives). Not persisted; optional `slog.Debug` of synthetic SQL / parsed structs. Formerly discussed as “potential schema” or “shadow surplus model”; **anticipated drift model** is the preferred name. |
 
+## Local authoring, global planning inputs
+
+**Authoring stays local:** drift comments live next to the relevant `CREATE TABLE`, index statement, or file region. Humans edit small, scoped surfaces.
+
+**Planning inputs are global artifacts:** the loader and planner must see the **entire** desired source (all files in the schema set) before drift can be resolved. In particular:
+
+- The **desired model** is already global (all tables and indexes from all files).
+- The **decorated schema** is global: drift directives are extracted and attached, and namespaced `DRIFT {id}` fragments from different places are **merged** into one logical group per `{id}` before planning.
+- **Anticipated drift** is global *per id*: for each `{id}`, the tool builds a **merged bundle** (union of fragments from table-local blocks, file-level blocks, index-related blocks, etc.). There is not one monolithic “anticipated entire database” unless you explicitly define that; typically you keep **`{id} → merged anticipated fragment(s)`** for matching against **actual**.
+
+**Implication:** load order and merge rules for the same `{id}` must be well-defined across the whole schema input; diff/plan never runs on “just this table’s comments” in isolation once `DRIFT` namespaces span scopes.
+
 ## Pipeline (target)
 
 1. **Load / decorate**  
@@ -47,7 +59,7 @@ CREATE TABLE public.questions (
 );
 ```
 
-- **`DRIFT {name}`** — Human-readable group id; internally key by table + name + policy.
+- **`DRIFT {id}`** — Namespace for a **drift effort**: the same `{id}` can appear in more than one place (see below). Policy (`DROP` / `DEPRECATED`) should be **consistent** for a given `{id}` within a file (or define merge rules if not).
 - **`DROP` | `DEPRECATED`** — Policy (exact semantics TBD):
   - **DROP**: If actual matches this bundle, plan explicit drops (or treat as allowed destructive work) rather than failing as unexplained drift.
   - **DEPRECATED**: Tolerate presence in actual without treating as fatal / or downgrade to warning — define precisely when implemented.
@@ -93,6 +105,37 @@ Grouping drift for **columns and constraints that appear in the `CREATE TABLE` b
 - **Surplus vs desired** — Index diff today is keyed separately from tables; decorated schema and planner must thread **index-shaped drift** through the same “disallowed unless allowed” pipeline as FK/UNIQUE surplus.
 
 Treat **file-level or index-adjacent `DRIFT`** as a first-class design item: specify syntax, attachment rules, and tests before assuming in-table `DRIFT` syntax generalizes.
+
+### Namespaced `DRIFT` ids (cross-scope groups)
+
+Use **`DRIFT {id}`** as a **namespace** so one logical “effort” (migration, release, cleanup) can attach fragments from different scopes. Load merges all blocks with the same `{id}` (and compatible policy) into one **decorated** group for planning.
+
+Example: table-local surplus plus file-global surplus under the same effort `x`:
+
+```sql
+CREATE TABLE a (
+  ...
+  -- DRIFT x DROP (
+  --  ... things removed from table `a` under effort `x` ...
+  -- )
+);
+
+-- DRIFT x DROP (
+--   ... things removed globally under effort `x` (e.g. standalone indexes, other tables)
+-- )
+```
+
+**Why this helps**
+
+- **Outside-table entities** (indexes, objects not inside a single `CREATE TABLE`) can contribute to the **same** anticipated drift / drop-allowance group as in-table fragments, without inventing artificial “fake tables” to hold index-only drift.
+- **Human workflow** — Authors think in terms of “effort `x`” across a file, not only per-table comment islands.
+
+**Rules to pin down when implementing**
+
+- **Merge semantics** — Same `{id}`: concatenate anticipated fragments, single policy per id, deterministic ordering when applying drops within the group.
+- **Conflicts** — Same `{id}` with different policies (`DROP` vs `DEPRECATED`) in one file should be a **load error** (or last-wins with explicit warning—pick one; prefer error).
+- **Scope of “global” block** — File-level inner body likely uses **full statement-shaped** synthetic DDL (`CREATE INDEX …`, `ALTER TABLE …`, or multiple probes), not only `CREATE TABLE` probes; grammar subset must be documented.
+- **Cross-file** — Unless explicitly supported later, treat `{id}` as **per-file** namespace to avoid collisions across schema dirs.
 
 ## Reuse of the real parser
 
