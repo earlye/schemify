@@ -143,15 +143,34 @@ fn create_index_sql(idx: &Index) -> String {
     } else {
         String::new()
     };
+    let col_list = index_column_list_sql(&idx.columns);
     format!(
         "CREATE {}INDEX CONCURRENTLY IF NOT EXISTS {} ON {}.{} ({}){}",
         qual,
         idx.name,
         idx.table_schema,
         idx.table_name,
-        idx.columns.join(", "),
+        col_list,
         using
     )
+}
+
+/// Index attribute list for CREATE INDEX. Expressions using `->` / `->>` must be wrapped in
+/// parentheses so the outer `(...)` of CREATE INDEX does not produce invalid SQL like
+/// `(props->>'kind')` (parsed as `(props) -> ...`).
+fn index_column_list_sql(columns: &[String]) -> String {
+    columns
+        .iter()
+        .map(|c| {
+            let t = c.trim();
+            if t.contains("->") && !t.starts_with('(') {
+                format!("({t})")
+            } else {
+                t.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn add_pk_sql(schema_name: &str, table_name: &str, pk: &PrimaryKeyConstraint) -> String {

@@ -25,6 +25,23 @@ import (
 // other tables that may exist in the test database.
 const itestPrefix = "schemify_itest_"
 
+// itestNSSchema is a dedicated PostgreSQL schema for non-public introspection tests.
+const itestNSSchema = "schemify_itest_ns"
+
+// itestNSSchemaSQL is a minimal fixture with a CREATE SCHEMA preamble; the schema must
+// exist in the database before Apply (schemify does not emit CREATE SCHEMA migrations).
+const itestNSSchemaSQL = `
+CREATE SCHEMA IF NOT EXISTS ` + itestNSSchema + `;
+
+CREATE TABLE ` + itestNSSchema + `.schemify_itest_ns_table (
+    id text NOT NULL,
+    PRIMARY KEY (id)
+);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS schemify_itest_idx_ns_table_id
+    ON ` + itestNSSchema + `.schemify_itest_ns_table (id);
+`
+
 // itestSchemaSQL defines a schema that exercises several index types:
 //   - single-column index
 //   - multi-column index
@@ -123,6 +140,34 @@ func TestIntegration_IndexIdempotency(t *testing.T) {
 	}
 }
 
+// TestIntegration_NonPublicSchemaIdempotency verifies load → diff → apply against a
+// schema other than public when the SQL file leads with CREATE SCHEMA IF NOT EXISTS.
+func TestIntegration_NonPublicSchemaIdempotency(t *testing.T) {
+	ctx := context.Background()
+	pool := itestPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+	itestCleanupNamespace(t, ctx, pool)
+	t.Cleanup(func() { itestCleanupNamespace(t, ctx, pool) })
+
+	if _, err := pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+itestNSSchema); err != nil {
+		t.Fatalf("create test schema: %v", err)
+	}
+
+	fsys := fstest.MapFS{
+		"schema.sql": &fstest.MapFile{Data: []byte(itestNSSchemaSQL)},
+	}
+
+	run1 := itestApplyInSchema(t, ctx, pool, fsys, "first run", itestNSSchema)
+	if len(run1) == 0 {
+		t.Fatal("first run: expected at least one migration, got none")
+	}
+
+	run2 := itestApplyInSchema(t, ctx, pool, fsys, "second run", itestNSSchema)
+	if len(run2) != 0 {
+		t.Errorf("second run: expected no migrations, got %d: %v", len(run2), run2)
+	}
+}
+
 func TestIntegration_ExtraConstraintsDetectedAsDestructive(t *testing.T) {
 	ctx := context.Background()
 	pool := itestPool(t, ctx)
@@ -177,6 +222,11 @@ func TestIntegration_ExtraConstraintsDetectedAsDestructive(t *testing.T) {
 // itestApply loads the given schema, introspects the DB (filtered to itest
 // tables/indexes only), diffs, applies, and returns the applied migrations.
 func itestApply(t *testing.T, ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, label string) []schemify.Migration {
+	return itestApplyInSchema(t, ctx, pool, fsys, label, "public")
+}
+
+// itestApplyInSchema is like itestApply but introspects the given PostgreSQL schema name.
+func itestApplyInSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, label, introspectSchema string) []schemify.Migration {
 	t.Helper()
 
 	desired, err := schemify.LoadSchema(fsys)
@@ -184,7 +234,7 @@ func itestApply(t *testing.T, ctx context.Context, pool *pgxpool.Pool, fsys fs.F
 		t.Fatalf("%s: LoadSchema: %v", label, err)
 	}
 
-	actual, err := schemify.Introspect(ctx, pool, "public")
+	actual, err := schemify.Introspect(ctx, pool, introspectSchema)
 	if err != nil {
 		t.Fatalf("%s: Introspect: %v", label, err)
 	}
@@ -238,6 +288,16 @@ func itestCleanup(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS "+tbl); err != nil {
 			t.Logf("cleanup warning: %v", err)
 		}
+	}
+}
+
+func itestCleanupNamespace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS "+itestNSSchema+".schemify_itest_ns_table CASCADE"); err != nil {
+		t.Logf("cleanup namespace table: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "DROP SCHEMA IF EXISTS "+itestNSSchema+" CASCADE"); err != nil {
+		t.Logf("cleanup namespace schema: %v", err)
 	}
 }
 

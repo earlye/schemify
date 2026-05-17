@@ -53,9 +53,8 @@ pub fn load_from_dir(dir: impl AsRef<Path>) -> Result<LoadResult> {
     for name in entries {
         let body = fs::read_to_string(dir.join(&name))
             .map_err(|e| Error::LoadSchema(format!("read {name}: {e}")))?;
-        let Ok((tbls, idxs)) = parse_ddl(&body) else {
-            continue;
-        };
+        let (tbls, idxs) =
+            parse_ddl(&body).map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
         for t in tbls {
             tables.insert(schema::table_key(&t.schema, &t.name), t);
         }
@@ -87,14 +86,19 @@ pub fn load_allow_drop_table_defs(dir: impl AsRef<Path>) -> Result<HashMap<Strin
     for name in entries {
         let body = fs::read_to_string(dir.join(&name))
             .map_err(|e| Error::LoadSchema(format!("read {name}: {e}")))?;
-        for (k, t) in extract_drop_table_block_defs(&body) {
+        let defs = extract_drop_table_block_defs(&body)
+            .map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
+        for (k, t) in defs {
             out.insert(k, t);
         }
     }
     Ok(out)
 }
 
-pub fn extract_drop_table_block_defs(raw_sql: &str) -> HashMap<String, Table> {
+/// Extract `-- DROP TABLE … (` … `-- );` blocks and parse each as `CREATE TABLE`.
+/// Incomplete blocks (no closing `-- );`) are skipped. Any block that closes but fails
+/// [`parse_ddl`] returns `Err` (fail-fast).
+pub fn extract_drop_table_block_defs(raw_sql: &str) -> Result<HashMap<String, Table>> {
     let lines: Vec<&str> = raw_sql.lines().collect();
     let mut out = HashMap::new();
     let mut i = 0usize;
@@ -124,15 +128,14 @@ pub fn extract_drop_table_block_defs(raw_sql: &str) -> HashMap<String, Table> {
             sb.push('\n');
         }
         let create_sql = sb.replacen("DROP TABLE", "CREATE TABLE", 1);
-        if let Ok((tbls, _)) = parse_ddl(&create_sql) {
-            if let Some(t) = tbls.into_iter().next() {
-                let key = schema::table_key(&t.schema, &t.name);
-                out.insert(key, t);
-            }
+        let (tbls, _) = parse_ddl(&create_sql)?;
+        if let Some(t) = tbls.into_iter().next() {
+            let key = schema::table_key(&t.schema, &t.name);
+            out.insert(key, t);
         }
         i = end + 1;
     }
-    out
+    Ok(out)
 }
 
 pub fn extract_removed_directives(raw_sql: &str) -> Vec<AllowDropColumn> {

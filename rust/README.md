@@ -15,7 +15,7 @@ Binary: `target/release/schemify`.
 Same flags/env as the Go CLI (`DB_*`, `SCHEMA_DIR`, `-s` schema dir, `-n` dry-run, `-v` / `-vv` for logging). Defaults match Go (`localhost`, user/database/password `schemify`, schema dir `./schemas/demo-v01`).
 
 ```bash
-export DB_SSLMODE=disable DB_PORT=5433
+export DB_SSLMODE=disable DB_PORT=11543
 ./target/release/schemify -s ../go/schemas/demo-v01 -v
 ```
 
@@ -24,7 +24,7 @@ export DB_SSLMODE=disable DB_PORT=5433
 From this directory:
 
 ```bash
-make up          # postgres:18 on localhost:5433
+make up          # postgres:18 on localhost:11543
 make test        # cargo test (starts postgres if needed)
 make apply-v01   # applies ../go/schemas/demo-v01
 ```
@@ -39,8 +39,16 @@ use schemify::{run, Options, DatabaseConfig, ApplyOptions};
 
 See crate root docs in `schemify/src/lib.rs`.
 
+### Loading schema files
+
+`load_from_dir` / `load_schema` require **every** `*.sql` file in the directory to parse successfully. A syntax or policy error in one file (for example `CREATE INDEX` without `CONCURRENTLY`) fails the whole load with an error naming the file. See [CHANGELOG.md](./CHANGELOG.md) for the rationale (fail-fast; avoids silent partial models).
+
+### Changelog
+
+Behavior changes are recorded in [CHANGELOG.md](./CHANGELOG.md).
+
 ## Tests
 
-Unit tests live under `schemify/tests/`. Integration tests connect with `DB_*` (default port `5432`); use `DB_PORT=5433` when using this folder’s `docker-compose.yml`.
+Unit tests live under `schemify/tests/`. Integration tests connect with `DB_*` (default port `5432`); use `DB_PORT=11543` when using this folder’s `docker-compose.yml` (or rely on `make test`, which sets it).
 
 License: MIT (match repo).

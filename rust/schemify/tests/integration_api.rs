@@ -69,6 +69,22 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS schemify_itest_idx_channels_owner
     ON public.schemify_itest_channels (owner);
 "#;
 
+/// Dedicated PostgreSQL schema for non-`public` introspection tests.
+const ITEST_NS_SCHEMA: &str = "schemify_itest_ns";
+
+/// Minimal fixture with a `CREATE SCHEMA` preamble; the schema must exist before apply.
+const ITEST_NS_SCHEMA_SQL: &str = r#"
+CREATE SCHEMA IF NOT EXISTS schemify_itest_ns;
+
+CREATE TABLE schemify_itest_ns.schemify_itest_ns_table (
+    id text NOT NULL,
+    PRIMARY KEY (id)
+);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS schemify_itest_idx_ns_table_id
+    ON schemify_itest_ns.schemify_itest_ns_table (id);
+"#;
+
 fn env_or(key: &str, def: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| def.into())
 }
@@ -114,13 +130,26 @@ async fn itest_cleanup(client: &tokio_postgres::Client) {
     }
 }
 
+async fn itest_cleanup_namespace(client: &tokio_postgres::Client) {
+    let _ = client
+        .execute(
+            "DROP TABLE IF EXISTS schemify_itest_ns.schemify_itest_ns_table CASCADE",
+            &[],
+        )
+        .await;
+    let _ = client
+        .execute("DROP SCHEMA IF EXISTS schemify_itest_ns CASCADE", &[])
+        .await;
+}
+
 async fn itest_apply(
     client: &mut tokio_postgres::Client,
     dir: &Path,
     label: &str,
+    introspect_schema: &str,
 ) -> Vec<schemify::diff::Migration> {
     let desired = load_from_dir(dir).expect(label);
-    let actual = introspect(client, "public").await.expect(label);
+    let actual = introspect(client, introspect_schema).await.expect(label);
 
     let actual_tables = filter_tables(&actual.tables, ITEST_PREFIX);
     let actual_indexes = filter_indexes(&actual.indexes, ITEST_PREFIX);
@@ -151,16 +180,60 @@ async fn integration_index_idempotency() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("schema.sql"), ITEST_SCHEMA_SQL).unwrap();
 
-    let run1 = itest_apply(&mut client, dir.path(), "first run").await;
+    let run1 = itest_apply(&mut client, dir.path(), "first run", "public").await;
     assert!(!run1.is_empty(), "first run: expected migrations");
 
-    let run2 = itest_apply(&mut client, dir.path(), "second run").await;
+    let run2 = itest_apply(&mut client, dir.path(), "second run", "public").await;
     assert!(
         run2.is_empty(),
         "second run: expected idempotency, got {run2:?}"
     );
 
     itest_cleanup(&client).await;
+}
+
+#[tokio::test]
+async fn integration_non_public_schema_idempotency() {
+    let Some(mut client) = itest_client().await else {
+        eprintln!("skip integration_non_public_schema_idempotency: postgres not reachable");
+        return;
+    };
+
+    itest_cleanup_namespace(&client).await;
+
+    client
+        .execute(
+            &format!("CREATE SCHEMA IF NOT EXISTS {ITEST_NS_SCHEMA}"),
+            &[],
+        )
+        .await
+        .expect("create test schema");
+
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("schema.sql"), ITEST_NS_SCHEMA_SQL).unwrap();
+
+    let run1 = itest_apply(
+        &mut client,
+        dir.path(),
+        "first run",
+        ITEST_NS_SCHEMA,
+    )
+    .await;
+    assert!(!run1.is_empty(), "first run: expected migrations");
+
+    let run2 = itest_apply(
+        &mut client,
+        dir.path(),
+        "second run",
+        ITEST_NS_SCHEMA,
+    )
+    .await;
+    assert!(
+        run2.is_empty(),
+        "second run: expected idempotency, got {run2:?}"
+    );
+
+    itest_cleanup_namespace(&client).await;
 }
 
 #[tokio::test]
@@ -175,7 +248,7 @@ async fn integration_extra_constraints_destructive() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("schema.sql"), ITEST_SCHEMA_SQL).unwrap();
 
-    itest_apply(&mut client, dir.path(), "baseline").await;
+    itest_apply(&mut client, dir.path(), "baseline", "public").await;
 
     client
         .execute(

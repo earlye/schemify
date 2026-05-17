@@ -1,5 +1,5 @@
 export DB_SSLMODE=disable
-export DB_PORT=5433
+export DB_PORT=10543
 GOFILES=$(shell find . -name "*.go")
 SHELL=/bin/bash -euo pipefail
 DECOLOR:=$(shell ./decolor.sh)

@@ -489,3 +489,62 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_key_docs_key_kind ON public.key_docs
 		t.Error("missing public.idx_key_docs_key_kind")
 	}
 }
+
+func TestParseDDL_CreateSchemaPreamble(t *testing.T) {
+	const ns = "schemify_test_users"
+	sql := `
+CREATE SCHEMA IF NOT EXISTS ` + ns + `;
+
+CREATE TABLE ` + ns + `.widgets (
+    id integer NOT NULL PRIMARY KEY
+);
+
+CREATE INDEX CONCURRENTLY idx_widgets_id ON ` + ns + `.widgets (id);
+`
+	tables, indexes, err := parseDDL(sql)
+	if err != nil {
+		t.Fatalf("parseDDL: %v", err)
+	}
+	if len(tables) != 1 {
+		t.Fatalf("expected 1 table, got %d", len(tables))
+	}
+	if tables[0].Schema != ns || tables[0].Name != "widgets" {
+		t.Errorf("table: schema=%q name=%q", tables[0].Schema, tables[0].Name)
+	}
+	if len(indexes) != 1 {
+		t.Fatalf("expected 1 index, got %d", len(indexes))
+	}
+	idx := indexes[0]
+	if idx.Schema != ns || idx.TableSchema != ns || idx.TableName != "widgets" {
+		t.Errorf("index: schema=%q table_schema=%q table_name=%q", idx.Schema, idx.TableSchema, idx.TableName)
+	}
+	if idx.Name != "idx_widgets_id" {
+		t.Errorf("index name: got %q", idx.Name)
+	}
+}
+
+func TestLoadFromFS_CreateSchemaPreamble(t *testing.T) {
+	const ns = "schemify_test_users"
+	dir := t.TempDir()
+	writeFile(t, dir, "schema.sql", `
+CREATE SCHEMA IF NOT EXISTS `+ns+`;
+
+CREATE TABLE `+ns+`.widgets (
+    id integer NOT NULL PRIMARY KEY
+);
+
+CREATE INDEX CONCURRENTLY idx_widgets_id ON `+ns+`.widgets (id);
+`)
+	got, err := LoadFromFS(os.DirFS(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := ns + ".widgets"
+	if _, ok := got.Tables[key]; !ok {
+		t.Fatalf("missing table %q, have keys: %v", key, got.Tables)
+	}
+	idxKey := ns + ".idx_widgets_id"
+	if _, ok := got.Indexes[idxKey]; !ok {
+		t.Fatalf("missing index %q, have keys: %v", idxKey, got.Indexes)
+	}
+}

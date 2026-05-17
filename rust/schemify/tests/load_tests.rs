@@ -126,9 +126,87 @@ CREATE TABLE public.child (
 }
 
 #[test]
+fn parse_ddl_create_schema_preamble() {
+    const NS: &str = "schemify_test_users";
+    let sql = format!(
+        r#"
+CREATE SCHEMA IF NOT EXISTS {NS};
+
+CREATE TABLE {NS}.widgets (
+    id integer NOT NULL PRIMARY KEY
+);
+
+CREATE INDEX CONCURRENTLY idx_widgets_id ON {NS}.widgets (id);
+"#
+    );
+    let (tables, indexes) = parse_ddl(&sql).unwrap();
+    assert_eq!(tables.len(), 1);
+    let tbl = &tables[0];
+    assert_eq!(tbl.schema, NS);
+    assert_eq!(tbl.name, "widgets");
+    assert_eq!(indexes.len(), 1);
+    let idx = &indexes[0];
+    assert_eq!(idx.schema, NS);
+    assert_eq!(idx.table_schema, NS);
+    assert_eq!(idx.table_name, "widgets");
+    assert_eq!(idx.name, "idx_widgets_id");
+}
+
+#[test]
+fn load_from_dir_create_schema_preamble() {
+    const NS: &str = "schemify_test_users";
+    let dir = tempdir().unwrap();
+    let sql = format!(
+        r#"
+CREATE SCHEMA IF NOT EXISTS {NS};
+
+CREATE TABLE {NS}.widgets (
+    id integer NOT NULL PRIMARY KEY
+);
+
+CREATE INDEX CONCURRENTLY idx_widgets_id ON {NS}.widgets (id);
+"#
+    );
+    fs::write(dir.path().join("schema.sql"), sql).unwrap();
+    let got = load_from_dir(dir.path()).unwrap();
+    assert!(got.tables.contains_key(&format!("{NS}.widgets")));
+    assert!(got.indexes.contains_key(&format!("{NS}.idx_widgets_id")));
+}
+
+#[test]
 fn extract_drop_table_no_closing_skipped() {
     let raw = "-- DROP TABLE public.foo (\n--     id integer\n";
-    assert!(extract_drop_table_block_defs(raw).is_empty());
+    assert!(
+        extract_drop_table_block_defs(raw)
+            .expect("incomplete block should not parse")
+            .is_empty()
+    );
+}
+
+#[test]
+fn load_from_dir_errors_on_parse_failure_in_any_file() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("good.sql"),
+        "CREATE TABLE public.users (id integer);",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("bad.sql"),
+        "CREATE INDEX idx_bad ON public.users (id);",
+    )
+    .unwrap();
+
+    let err = load_from_dir(dir.path()).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("bad.sql"),
+        "expected bad.sql in error message, got: {msg}"
+    );
+    assert!(
+        msg.contains("CONCURRENTLY") || msg.contains("parse SQL"),
+        "expected parse failure detail, got: {msg}"
+    );
 }
 
 #[test]

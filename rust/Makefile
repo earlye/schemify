@@ -1,6 +1,6 @@
 # Rust schemify sandbox (mirrors go/Makefile apply-* targets).
 export DB_SSLMODE=disable
-export DB_PORT=5433
+export DB_PORT=11543
 export DB_HOST=localhost
 export DB_USER=schemify
 export DB_PASSWORD=schemify
@@ -17,9 +17,10 @@ all: build
 build:
 	cargo build -p schemify-cli --release
 
+# Integration tests share one DB; run serially to avoid cross-test races.
 .PHONY: test
 test: up
-	cargo test --workspace
+	cargo test --workspace -- --test-threads=1
 
 .PHONY: up
 up:

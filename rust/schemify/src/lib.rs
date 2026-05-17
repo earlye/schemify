@@ -12,9 +12,7 @@ pub mod schema;
 
 pub use apply::{ApplyOptions, apply, migration_sql};
 pub use db::{DatabaseConfig, IntrospectResult, connect, introspect};
-pub use diff::{
-    DestructiveChange, Migration, MigrationDetail, diff_tables_and_indexes,
-};
+pub use diff::{DestructiveChange, Migration, MigrationDetail, diff_tables_and_indexes};
 pub use error::{Error, Result};
 pub use load::{
     LoadResult, extract_drop_table_block_defs, extract_removed_directives,
