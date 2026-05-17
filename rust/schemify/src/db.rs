@@ -163,6 +163,51 @@ pub async fn introspect(client: &Client, schema_name: &str) -> Result<Introspect
     })
 }
 
+/// Non-system namespace names present in the database.
+pub async fn list_user_schemas(client: &Client) -> Result<std::collections::HashSet<String>> {
+    let rows = client
+        .query(
+            "SELECT nspname FROM pg_namespace
+             WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+               AND nspname NOT LIKE 'pg_toast%'
+               AND nspname NOT LIKE 'pg\\_%'
+             ORDER BY nspname",
+            &[],
+        )
+        .await
+        .map_err(|e| Error::Introspect(e.to_string()))?;
+    let mut out = std::collections::HashSet::new();
+    for row in rows {
+        let name: String = row.get(0);
+        let name = name.to_lowercase();
+        if crate::namespace::is_system_namespace(&name) {
+            continue;
+        }
+        out.insert(name);
+    }
+    Ok(out)
+}
+
+pub async fn introspect_all(
+    client: &Client,
+    schema_names: &[String],
+) -> Result<IntrospectResult> {
+    let mut tables_out = HashMap::new();
+    let mut indexes_out = HashMap::new();
+    for ns in schema_names {
+        if crate::namespace::is_system_namespace(ns) {
+            continue;
+        }
+        let part = introspect(client, ns).await?;
+        tables_out.extend(part.tables);
+        indexes_out.extend(part.indexes);
+    }
+    Ok(IntrospectResult {
+        tables: tables_out,
+        indexes: indexes_out,
+    })
+}
+
 async fn list_tables(client: &Client, schema_name: &str) -> Result<Vec<String>> {
     let rows = client
         .query(

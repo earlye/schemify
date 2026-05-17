@@ -42,8 +42,11 @@ loadResult, err := schemify.LoadSchema(schemaFS)
 pool, _ := pgxpool.New(ctx, connStr)
 introResult, err := schemify.Introspect(ctx, pool, "public")
 
-// Diff desired vs actual
+// Diff desired vs actual (namespaces, tables, indexes)
+desiredNs := schema.CollectDesiredNamespaces(loadResult)
+actualNs, _ := db.ListUserSchemas(ctx, pool)
 migrations, disallowed := schemify.Diff(
+    desiredNs, actualNs,
     loadResult.Tables, introResult.Tables,
     loadResult.Indexes, introResult.Indexes,
     nil, // or pass LoadAllowDropTableDefs result
@@ -55,7 +58,11 @@ sql, err := schemify.Apply(ctx, pool, migrations, schemify.ApplyOptions{DryRun: 
 
 ## Schema format
 
-Put one or more `.sql` files in a directory containing DDL. 
+Put one or more `.sql` files in a directory containing DDL.
+
+### Schemas (namespaces)
+
+Optional `CREATE SCHEMA IF NOT EXISTS name;` lines are parsed. Schemify also derives required namespaces from qualified table/index DDL (e.g. `CREATE TABLE users.widgets` requires namespace `users`, including `public` if it was dropped). Missing namespaces are created with `CREATE SCHEMA IF NOT EXISTS` before tables. Extra namespaces in the database that are not in the desired model are reported as destructive `drop_schema` drift (`public` is never flagged for drop).
 
 ### Tables
 

@@ -149,10 +149,6 @@ func TestIntegration_NonPublicSchemaIdempotency(t *testing.T) {
 	itestCleanupNamespace(t, ctx, pool)
 	t.Cleanup(func() { itestCleanupNamespace(t, ctx, pool) })
 
-	if _, err := pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+itestNSSchema); err != nil {
-		t.Fatalf("create test schema: %v", err)
-	}
-
 	fsys := fstest.MapFS{
 		"schema.sql": &fstest.MapFile{Data: []byte(itestNSSchemaSQL)},
 	}
@@ -200,8 +196,10 @@ func TestIntegration_ExtraConstraintsDetectedAsDestructive(t *testing.T) {
 	}
 	actualTables := itestFilterTables(actual.Tables, itestPrefix)
 	actualIndexes := itestFilterIndexes(actual.Indexes, itestPrefix)
+	desiredNs := schema.CollectDesiredNamespaces(desired)
+	actualNs := itestFilterNamespaces(t, ctx, pool, "public")
 
-	_, disallowed := schemify.Diff(desired.Tables, actualTables, desired.Indexes, actualIndexes, nil)
+	_, disallowed := schemify.Diff(desiredNs, actualNs, desired.Tables, actualTables, desired.Indexes, actualIndexes, nil)
 	if len(disallowed) == 0 {
 		t.Fatal("expected destructive drift for extra constraints, got none")
 	}
@@ -243,8 +241,10 @@ func itestApplyInSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool, f
 	// tables in the database do not trigger spurious destructive-change errors.
 	actualTables := itestFilterTables(actual.Tables, itestPrefix)
 	actualIndexes := itestFilterIndexes(actual.Indexes, itestPrefix)
+	desiredNs := schema.CollectDesiredNamespaces(desired)
+	actualNs := itestFilterNamespaces(t, ctx, pool, introspectSchema)
 
-	migrations, disallowed := schemify.Diff(desired.Tables, actualTables, desired.Indexes, actualIndexes, nil)
+	migrations, disallowed := schemify.Diff(desiredNs, actualNs, desired.Tables, actualTables, desired.Indexes, actualIndexes, nil)
 	if len(disallowed) > 0 {
 		t.Fatalf("%s: Diff produced disallowed changes: %v", label, disallowed)
 	}
@@ -261,6 +261,21 @@ func itestFilterTables(all map[string]*schema.Table, prefix string) map[string]*
 		if strings.HasPrefix(v.Name, prefix) {
 			out[k] = v
 		}
+	}
+	return out
+}
+
+// itestFilterNamespaces limits namespace diff to the schema under test so unrelated
+// namespaces in a shared database do not produce drop_schema drift.
+func itestFilterNamespaces(t *testing.T, ctx context.Context, pool *pgxpool.Pool, introspectSchema string) map[string]struct{} {
+	t.Helper()
+	all, err := idb.ListUserSchemas(ctx, pool)
+	if err != nil {
+		t.Fatalf("ListUserSchemas: %v", err)
+	}
+	out := make(map[string]struct{})
+	if _, ok := all[introspectSchema]; ok {
+		out[introspectSchema] = struct{}{}
 	}
 	return out
 }

@@ -5,6 +5,7 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
+pub const KIND_CREATE_SCHEMA: &str = "create_schema";
 pub const KIND_CREATE_TABLE: &str = "create_table";
 pub const KIND_ADD_COLUMN: &str = "add_column";
 pub const KIND_DROP_COLUMN: &str = "drop_column";
@@ -16,6 +17,7 @@ pub const KIND_ADD_FK: &str = "add_foreign_key";
 
 #[derive(Debug, Clone)]
 pub enum MigrationDetail {
+    CreateSchema,
     CreateTable { table_def: Table },
     AddColumn { column: schema::Column },
     DropColumn { column_name: String },
@@ -69,6 +71,7 @@ impl DestructiveChange {
                 "foreign key {}.{}.{} would be dropped",
                 self.schema, self.table, self.name
             ),
+            "drop_schema" => format!("schema {} would be dropped", self.schema),
             "primary_key_mismatch" => {
                 let mut s = format!(
                     "table {}.{} primary key would change",
@@ -215,6 +218,8 @@ fn describe_column_drift(actual: &Table, expected: &Table) -> String {
 }
 
 pub fn diff_tables_and_indexes(
+    desired_namespaces: &HashSet<String>,
+    actual_namespaces: &HashSet<String>,
     desired: &HashMap<String, Table>,
     actual: &HashMap<String, Table>,
     desired_indexes: Option<&HashMap<String, Index>>,
@@ -223,6 +228,30 @@ pub fn diff_tables_and_indexes(
 ) -> (Vec<Migration>, Vec<DestructiveChange>) {
     let mut migrations = Vec::new();
     let mut disallowed = Vec::new();
+
+    for ns in desired_namespaces {
+        if !actual_namespaces.contains(ns) {
+            migrations.push(Migration {
+                kind: KIND_CREATE_SCHEMA,
+                schema: ns.clone(),
+                table: String::new(),
+                detail: MigrationDetail::CreateSchema,
+            });
+        }
+    }
+    for ns in actual_namespaces {
+        if !desired_namespaces.contains(ns) && crate::namespace::is_drop_schema_candidate(ns) {
+            disallowed.push(DestructiveChange {
+                kind: "drop_schema".into(),
+                schema: ns.clone(),
+                table: String::new(),
+                column: String::new(),
+                index: String::new(),
+                name: String::new(),
+                detail: String::new(),
+            });
+        }
+    }
 
     for (key, t) in actual {
         if desired.get(key).is_none() {
@@ -446,8 +475,42 @@ pub fn diff_tables_and_indexes(
         }
     }
 
-    migrations = topo_sort_create_table(migrations);
+    migrations = sort_migrations(migrations);
     (migrations, disallowed)
+}
+
+fn migration_kind_rank(kind: &str) -> i32 {
+    match kind {
+        KIND_CREATE_SCHEMA => 0,
+        KIND_CREATE_TABLE => 1,
+        KIND_ADD_COLUMN => 2,
+        KIND_ADD_PK => 3,
+        KIND_ADD_UNIQUE => 4,
+        KIND_ADD_FK => 5,
+        KIND_CREATE_INDEX => 6,
+        KIND_DROP_COLUMN => 7,
+        KIND_DROP_TABLE => 8,
+        _ => 9,
+    }
+}
+
+fn migration_index_name(m: &Migration) -> &str {
+    match &m.detail {
+        MigrationDetail::CreateIndex { index } => index.name.as_str(),
+        _ => "",
+    }
+}
+
+fn sort_migrations(migrations: Vec<Migration>) -> Vec<Migration> {
+    let mut out = migrations;
+    out.sort_by(|a, b| {
+        migration_kind_rank(a.kind)
+            .cmp(&migration_kind_rank(b.kind))
+            .then_with(|| a.schema.cmp(&b.schema))
+            .then_with(|| a.table.cmp(&b.table))
+            .then_with(|| migration_index_name(a).cmp(migration_index_name(b)))
+    });
+    topo_sort_create_table(out)
 }
 
 fn describe_pk_drift(

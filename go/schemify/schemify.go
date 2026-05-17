@@ -42,10 +42,15 @@ func Introspect(ctx context.Context, pool *pgxpool.Pool, schemaName string) (*db
 	return db.Introspect(ctx, pool, schemaName)
 }
 
-// Diff compares desired vs actual (tables and indexes) and returns migrations and disallowed changes.
+// Diff compares desired vs actual (namespaces, tables, and indexes) and returns migrations and disallowed changes.
 // allowDropTableDefs is from LoadAllowDropTableDefs (expected table defs from "-- DROP TABLE ... (" blocks); pass nil if none.
-func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexes map[string]*schema.Index, allowDropTableDefs map[string]*schema.Table) (migrations []diff.Migration, disallowed []diff.DestructiveChange) {
-	return diff.Diff(desired, actual, desiredIndexes, actualIndexes, allowDropTableDefs)
+func Diff(
+	desiredNamespaces, actualNamespaces map[string]struct{},
+	desired, actual map[string]*schema.Table,
+	desiredIndexes, actualIndexes map[string]*schema.Index,
+	allowDropTableDefs map[string]*schema.Table,
+) (migrations []diff.Migration, disallowed []diff.DestructiveChange) {
+	return diff.Diff(desiredNamespaces, actualNamespaces, desired, actual, desiredIndexes, actualIndexes, allowDropTableDefs)
 }
 
 // LoadAllowDropTableDefs reads "-- DROP TABLE ... (" ... "-- );" blocks from SQL files in fsys,
@@ -67,7 +72,13 @@ func Plan(ctx context.Context, cfg *Options, pool *pgxpool.Pool) ([]Migration, e
 		return nil, errors.WrapPrefix(err, "load schema", 0)
 	}
 
-	introResult, err := Introspect(ctx, pool, "public")
+	desiredNamespaces := schema.CollectDesiredNamespaces(loadResult)
+	actualNamespaces, err := db.ListUserSchemas(ctx, pool)
+	if err != nil {
+		return nil, errors.WrapPrefix(err, "list schemas", 0)
+	}
+	namespaces := schema.UnionNamespaces(desiredNamespaces, actualNamespaces)
+	introResult, err := db.IntrospectAll(ctx, pool, namespaces)
 	if err != nil {
 		return nil, errors.WrapPrefix(err, "introspect", 0)
 	}
@@ -77,7 +88,12 @@ func Plan(ctx context.Context, cfg *Options, pool *pgxpool.Pool) ([]Migration, e
 		return nil, errors.WrapPrefix(err, "load allow-drop table defs", 0)
 	}
 
-	migrations, disallowed := Diff(loadResult.Tables, introResult.Tables, loadResult.Indexes, introResult.Indexes, allowDropTableDefs)
+	migrations, disallowed := Diff(
+		desiredNamespaces, actualNamespaces,
+		loadResult.Tables, introResult.Tables,
+		loadResult.Indexes, introResult.Indexes,
+		allowDropTableDefs,
+	)
 	if len(disallowed) > 0 {
 		var msg []string
 		msg = append(msg, "destructive changes are not allowed:")

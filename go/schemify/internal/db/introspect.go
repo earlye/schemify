@@ -60,6 +60,58 @@ func Introspect(ctx context.Context, pool *pgxpool.Pool, schemaName string) (*In
 	return &IntrospectResult{Tables: tablesOut, Indexes: indexesOut}, nil
 }
 
+// ListUserSchemas returns non-system namespace names present in the database.
+func ListUserSchemas(ctx context.Context, pool *pgxpool.Pool) (map[string]struct{}, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT nspname FROM pg_namespace
+		 WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+		   AND nspname NOT LIKE 'pg_toast%'
+		   AND nspname NOT LIKE 'pg\_%'
+		 ORDER BY nspname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]struct{})
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		name = strings.ToLower(name)
+		if schema.IsSystemNamespace(name) {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// IntrospectAll introspects each namespace and merges tables and indexes.
+func IntrospectAll(ctx context.Context, pool *pgxpool.Pool, schemaNames []string) (*IntrospectResult, error) {
+	out := &IntrospectResult{
+		Tables:  make(map[string]*schema.Table),
+		Indexes: make(map[string]*schema.Index),
+	}
+	for _, ns := range schemaNames {
+		if schema.IsSystemNamespace(ns) {
+			continue
+		}
+		part, err := Introspect(ctx, pool, ns)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range part.Tables {
+			out.Tables[k] = v
+		}
+		for k, v := range part.Indexes {
+			out.Indexes[k] = v
+		}
+	}
+	return out, nil
+}
+
 func tableKey(schemaName, tableName string) string {
 	return schemaName + "." + tableName
 }

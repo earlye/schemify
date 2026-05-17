@@ -2,9 +2,10 @@
 //! Skips if `DB_HOST` / default localhost:5432 is unreachable.
 
 use schemify::apply::{ApplyOptions, apply};
-use schemify::db::{DatabaseConfig, connect, introspect};
+use schemify::db::{DatabaseConfig, connect, introspect, list_user_schemas};
 use schemify::diff::diff_tables_and_indexes;
 use schemify::load::load_from_dir;
+use schemify::collect_desired_namespaces;
 use schemify::schema::{Index, Table};
 use std::collections::HashMap;
 use std::fs;
@@ -130,6 +131,18 @@ async fn itest_cleanup(client: &tokio_postgres::Client) {
     }
 }
 
+async fn filter_namespaces(
+    client: &tokio_postgres::Client,
+    introspect_schema: &str,
+) -> std::collections::HashSet<String> {
+    let all = list_user_schemas(client).await.unwrap_or_default();
+    if all.contains(introspect_schema) {
+        [introspect_schema.into()].into_iter().collect()
+    } else {
+        std::collections::HashSet::new()
+    }
+}
+
 async fn itest_cleanup_namespace(client: &tokio_postgres::Client) {
     let _ = client
         .execute(
@@ -153,8 +166,12 @@ async fn itest_apply(
 
     let actual_tables = filter_tables(&actual.tables, ITEST_PREFIX);
     let actual_indexes = filter_indexes(&actual.indexes, ITEST_PREFIX);
+    let desired_ns = collect_desired_namespaces(&desired);
+    let actual_ns = filter_namespaces(&client, introspect_schema).await;
 
     let (migrations, disallowed) = diff_tables_and_indexes(
+        &desired_ns,
+        &actual_ns,
         &desired.tables,
         &actual_tables,
         Some(&desired.indexes),
@@ -200,14 +217,6 @@ async fn integration_non_public_schema_idempotency() {
     };
 
     itest_cleanup_namespace(&client).await;
-
-    client
-        .execute(
-            &format!("CREATE SCHEMA IF NOT EXISTS {ITEST_NS_SCHEMA}"),
-            &[],
-        )
-        .await
-        .expect("create test schema");
 
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("schema.sql"), ITEST_NS_SCHEMA_SQL).unwrap();
@@ -269,8 +278,12 @@ async fn integration_extra_constraints_destructive() {
     let actual = introspect(&client, "public").await.unwrap();
     let actual_tables = filter_tables(&actual.tables, ITEST_PREFIX);
     let actual_indexes = filter_indexes(&actual.indexes, ITEST_PREFIX);
+    let desired_ns = collect_desired_namespaces(&desired);
+    let actual_ns = filter_namespaces(&client, "public").await;
 
     let (_, disallowed) = diff_tables_and_indexes(
+        &desired_ns,
+        &actual_ns,
         &desired.tables,
         &actual_tables,
         Some(&desired.indexes),

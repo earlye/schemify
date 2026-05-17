@@ -14,10 +14,11 @@ import (
 	"github.com/earlye/postgresparser"
 )
 
-// LoadResult holds the result of LoadFromDir (tables and indexes).
+// LoadResult holds the result of LoadFromDir (tables, indexes, and explicit CREATE SCHEMA names).
 type LoadResult struct {
-	Tables  map[string]*Table // key: schema.tablename
-	Indexes map[string]*Index // key: schema.indexname
+	Schemas map[string]struct{} // from CREATE SCHEMA statements in SQL files
+	Tables  map[string]*Table   // key: schema.tablename
+	Indexes map[string]*Index   // key: schema.indexname
 }
 
 // LoadFromDir reads all *.sql files from dir, parses CREATE TABLE and CREATE INDEX statements,
@@ -46,17 +47,21 @@ func LoadFromFS(fsys fs.FS) (*LoadResult, error) {
 
 	tables := make(map[string]*Table)
 	indexes := make(map[string]*Index)
+	schemas := make(map[string]struct{})
 
 	for _, path := range sqlFiles {
 		body, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
-		tbls, idxs, err := parseDDL(string(body))
+		tbls, idxs, explicitSchemas, err := parseDDL(string(body))
 		if err != nil {
 			// File may contain only comments (e.g. -- DROP TABLE ... directive); treat as 0 tables.
 			// TODO: detect specific error, so syntax errors are still reported.
 			continue
+		}
+		for ns := range explicitSchemas {
+			schemas[ns] = struct{}{}
 		}
 		for _, t := range tbls {
 			key := tableKey(t.Schema, t.Name)
@@ -69,11 +74,12 @@ func LoadFromFS(fsys fs.FS) (*LoadResult, error) {
 	}
 
 	slog.Debug("Loaded schema",
+		"schemas", slices.Collect(maps.Keys(schemas)),
 		"tables", slices.Collect(maps.Keys(tables)),
 		"indexes", slices.Collect(maps.Keys(indexes)),
 	)
 
-	return &LoadResult{Tables: tables, Indexes: indexes}, nil
+	return &LoadResult{Schemas: schemas, Tables: tables, Indexes: indexes}, nil
 }
 
 // LoadAllowDropTableDefs reads all *.sql files in fsys, finds "-- DROP TABLE schema.tablename ("
@@ -142,7 +148,7 @@ func extractDropTableBlockDefs(rawSQL string) map[string]*Table {
 			sb.WriteString("\n")
 		}
 		createSQL := strings.Replace(sb.String(), "DROP TABLE", "CREATE TABLE", 1)
-		tbls, _, err := parseDDL(createSQL)
+		tbls, _, _, err := parseDDL(createSQL)
 		if err != nil || len(tbls) == 0 {
 			continue
 		}
@@ -182,6 +188,28 @@ var dropTableCommentRE = regexp.MustCompile(`(?m)^\s*--\s*DROP TABLE\s+(\w+(?:\.
 // dropTableBlockEndRE matches the closing line of a DROP TABLE block: "-- );"
 var dropTableBlockEndRE = regexp.MustCompile(`^\s*--\s*\)\s*;?\s*$`)
 
+// createSchemaRE matches CREATE SCHEMA [IF NOT EXISTS] name (quoted or unquoted).
+var createSchemaRE = regexp.MustCompile(`(?is)CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_$]*))`)
+
+func extractCreateSchemas(sql string) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, sub := range createSchemaRE.FindAllStringSubmatch(sql, -1) {
+		if len(sub) < 3 {
+			continue
+		}
+		name := strings.TrimSpace(sub[1])
+		if name == "" {
+			name = strings.TrimSpace(sub[2])
+		}
+		name = strings.ToLower(name)
+		if name == "" || IsSystemNamespace(name) {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out
+}
+
 func extractRemovedDirectives(rawSQL string) []AllowDropColumn {
 	var out []AllowDropColumn
 	for _, sub := range removedDirectiveRE.FindAllStringSubmatch(rawSQL, -1) {
@@ -205,17 +233,24 @@ func extractRemovedDirectives(rawSQL string) []AllowDropColumn {
 	return out
 }
 
-func parseDDL(sql string) ([]*Table, []*Index, error) {
+func parseDDL(sql string) ([]*Table, []*Index, map[string]struct{}, error) {
 	batch, err := postgresparser.ParseSQLAll(sql)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	var tables []*Table
 	var indexes []*Index
+	explicitSchemas := extractCreateSchemas(sql)
 	for _, stmt := range batch.Statements {
 		if stmt.Query == nil {
+			for ns := range extractCreateSchemas(stmt.RawSQL) {
+				explicitSchemas[ns] = struct{}{}
+			}
 			continue
+		}
+		for ns := range extractCreateSchemas(stmt.RawSQL) {
+			explicitSchemas[ns] = struct{}{}
 		}
 		allowDrops := extractRemovedDirectives(stmt.RawSQL)
 		for _, action := range stmt.Query.DDLActions {
@@ -295,7 +330,7 @@ func parseDDL(sql string) ([]*Table, []*Index, error) {
 					}
 				}
 				if !concurrent {
-					return nil, nil, fmt.Errorf("CREATE INDEX %s.%s must use CONCURRENTLY (required for large-table safety)", idxSchema, action.ObjectName)
+					return nil, nil, nil, fmt.Errorf("CREATE INDEX %s.%s must use CONCURRENTLY (required for large-table safety)", idxSchema, action.ObjectName)
 				}
 				idxType := action.IndexType
 				if idxType == "" {
@@ -321,7 +356,7 @@ func parseDDL(sql string) ([]*Table, []*Index, error) {
 			}
 		}
 	}
-	return tables, indexes, nil
+	return tables, indexes, explicitSchemas, nil
 }
 
 // lowerAll returns a new slice with each element lowercased.

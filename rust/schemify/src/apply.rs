@@ -64,6 +64,7 @@ pub async fn apply(
 
 pub fn migration_sql(m: &Migration) -> Result<String> {
     match &m.detail {
+        MigrationDetail::CreateSchema => Ok(create_schema_sql(&m.schema)),
         MigrationDetail::CreateTable { table_def } => Ok(create_table_sql(table_def)),
         MigrationDetail::AddColumn { column } => Ok(add_column_sql(&m.schema, &m.table, column)),
         MigrationDetail::DropColumn { column_name } => {
@@ -81,6 +82,10 @@ pub fn migration_sql(m: &Migration) -> Result<String> {
             Ok(add_fk_sql(&m.schema, &m.table, foreign_key))
         }
     }
+}
+
+fn create_schema_sql(schema_name: &str) -> String {
+    format!("CREATE SCHEMA IF NOT EXISTS {schema_name}")
 }
 
 fn create_table_sql(t: &Table) -> String {

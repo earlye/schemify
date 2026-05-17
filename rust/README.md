@@ -39,6 +39,10 @@ use schemify::{run, Options, DatabaseConfig, ApplyOptions};
 
 See crate root docs in `schemify/src/lib.rs`.
 
+### Schemas (namespaces)
+
+`CREATE SCHEMA IF NOT EXISTS …` in SQL is optional; namespaces are also inferred from qualified `CREATE TABLE` / `CREATE INDEX` DDL. `plan` / `run` create missing namespaces (including `public` when referenced) and refuse surplus namespaces as `drop_schema` destructive drift (`public` is never flagged for drop).
+
 ### Loading schema files
 
 `load_from_dir` / `load_schema` require **every** `*.sql` file in the directory to parse successfully. A syntax or policy error in one file (for example `CREATE INDEX` without `CONCURRENTLY`) fails the whole load with an error naming the file. See [CHANGELOG.md](./CHANGELOG.md) for the rationale (fail-fast; avoids silent partial models).

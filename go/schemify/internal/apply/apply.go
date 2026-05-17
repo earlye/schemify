@@ -80,6 +80,8 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 
 func migrationSQL(m diff.Migration) (string, error) {
 	switch d := m.Detail.(type) {
+	case *diff.CreateSchemaDetail:
+		return createSchemaSQL(m.Schema), nil
 	case *diff.CreateTableDetail:
 		return createTableSQL(d.TableDef), nil
 	case *diff.AddColumnDetail:
@@ -99,6 +101,10 @@ func migrationSQL(m diff.Migration) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown migration detail: %T", m.Detail)
 	}
+}
+
+func createSchemaSQL(schemaName string) string {
+	return fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", schemaName)
 }
 
 func createTableSQL(t *schema.Table) string {

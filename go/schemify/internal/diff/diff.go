@@ -1,8 +1,10 @@
 package diff
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -85,17 +87,19 @@ type MigrationDetail interface{ migrationDetail() }
 
 // Kind constants for Migration.Kind.
 const (
-	KindCreateTable = "create_table"
-	KindAddColumn   = "add_column"
-	KindDropColumn  = "drop_column"
-	KindDropTable   = "drop_table"
-	KindCreateIndex = "create_index"
-	KindAddPK       = "add_primary_key"
-	KindAddUnique   = "add_unique_key"
-	KindAddFK       = "add_foreign_key"
+	KindCreateSchema = "create_schema"
+	KindCreateTable  = "create_table"
+	KindAddColumn    = "add_column"
+	KindDropColumn   = "drop_column"
+	KindDropTable    = "drop_table"
+	KindCreateIndex  = "create_index"
+	KindAddPK        = "add_primary_key"
+	KindAddUnique    = "add_unique_key"
+	KindAddFK        = "add_foreign_key"
 )
 
 // Detail types — one per Kind.
+type CreateSchemaDetail struct{}
 type CreateTableDetail struct{ TableDef *schema.Table }
 type AddColumnDetail struct{ Column *schema.Column }
 type DropColumnDetail struct{ ColumnName string }
@@ -105,7 +109,8 @@ type AddPKDetail struct{ PrimaryKey *schema.PrimaryKeyConstraint }
 type AddUniqueDetail struct{ UniqueKey *schema.UniqueConstraint }
 type AddFKDetail struct{ ForeignKey *schema.ForeignKey }
 
-func (*CreateTableDetail) migrationDetail() {}
+func (*CreateSchemaDetail) migrationDetail() {}
+func (*CreateTableDetail) migrationDetail()  {}
 func (*AddColumnDetail) migrationDetail()   {}
 func (*DropColumnDetail) migrationDetail()  {}
 func (*DropTableDetail) migrationDetail()   {}
@@ -155,6 +160,8 @@ func (d DestructiveChange) String() string {
 			s += ": " + d.Detail
 		}
 		return s
+	case "drop_schema":
+		return fmt.Sprintf("schema %s would be dropped", d.Schema)
 	default:
 		return fmt.Sprintf("%s %s.%s would be dropped", d.Kind, d.Schema, d.Table)
 	}
@@ -229,7 +236,30 @@ func IndexMatches(actual, desired *schema.Index) bool {
 // a table in actual but not desired is dropped only if its key is in the map and TablesMatchForDrop(actual, expected).
 // desiredIndexes/actualIndexes can be nil (no index diff). Index in actual but not in desired -> destructive drop_index.
 // Returns additive migrations to apply and any destructive changes (which must not be applied).
-func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexes map[string]*schema.Index, allowDropTableDefs map[string]*schema.Table) (migrations []Migration, disallowed []DestructiveChange) {
+func Diff(
+	desiredNamespaces, actualNamespaces map[string]struct{},
+	desired, actual map[string]*schema.Table,
+	desiredIndexes, actualIndexes map[string]*schema.Index,
+	allowDropTableDefs map[string]*schema.Table,
+) (migrations []Migration, disallowed []DestructiveChange) {
+	for ns := range desiredNamespaces {
+		if _, ok := actualNamespaces[ns]; !ok {
+			migrations = append(migrations, Migration{
+				Kind:   KindCreateSchema,
+				Schema: ns,
+				Detail: &CreateSchemaDetail{},
+			})
+		}
+	}
+	for ns := range actualNamespaces {
+		if _, ok := desiredNamespaces[ns]; !ok && schema.IsDropSchemaCandidate(ns) {
+			disallowed = append(disallowed, DestructiveChange{
+				Kind:   "drop_schema",
+				Schema: ns,
+			})
+		}
+	}
+
 	// Tables in actual but not in desired -> drop table (migration if allowed and columns match, else destructive)
 	for key, t := range actual {
 		if desired[key] == nil {
@@ -417,8 +447,61 @@ func Diff(desired, actual map[string]*schema.Table, desiredIndexes, actualIndexe
 		}
 	}
 
-	migrations = topoSortCreateTable(migrations)
+	migrations = sortMigrations(migrations)
 	return migrations, disallowed
+}
+
+func migrationKindRank(kind string) int {
+	switch kind {
+	case KindCreateSchema:
+		return 0
+	case KindCreateTable:
+		return 1
+	case KindAddColumn:
+		return 2
+	case KindAddPK:
+		return 3
+	case KindAddUnique:
+		return 4
+	case KindAddFK:
+		return 5
+	case KindCreateIndex:
+		return 6
+	case KindDropColumn:
+		return 7
+	case KindDropTable:
+		return 8
+	default:
+		return 9
+	}
+}
+
+func migrationSortKey(m Migration) (int, string, string, string) {
+	idx := ""
+	switch d := m.Detail.(type) {
+	case *CreateIndexDetail:
+		idx = d.Index.Name
+	}
+	return migrationKindRank(m.Kind), m.Schema, m.Table, idx
+}
+
+// sortMigrations orders migrations by kind (create_schema first), stable ties, then FK topo for create_table.
+func sortMigrations(migrations []Migration) []Migration {
+	slices.SortStableFunc(migrations, func(a, b Migration) int {
+		ka0, ka1, ka2, ka3 := migrationSortKey(a)
+		kb0, kb1, kb2, kb3 := migrationSortKey(b)
+		if c := cmp.Compare(ka0, kb0); c != 0 {
+			return c
+		}
+		if c := strings.Compare(ka1, kb1); c != 0 {
+			return c
+		}
+		if c := strings.Compare(ka2, kb2); c != 0 {
+			return c
+		}
+		return strings.Compare(ka3, kb3)
+	})
+	return topoSortCreateTable(migrations)
 }
 
 // topoSortCreateTable reorders create_table migrations so that tables referenced by FK constraints

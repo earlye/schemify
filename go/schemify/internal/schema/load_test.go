@@ -48,7 +48,7 @@ func writeFile(t *testing.T, dir, name, content string) {
 
 func TestParseDDL_SingleTable(t *testing.T) {
 	sql := `CREATE TABLE public.foo (id integer, name character varying(100));`
-	tables, indexes, err := parseDDL(sql)
+	tables, indexes, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestParseDDL_RemovedDirective(t *testing.T) {
     -- removed: passwordhash character varying(64)
 );
 `
-	tables, _, err := parseDDL(sql)
+	tables, _, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestParseDDL_RemovedDirectiveAnyType(t *testing.T) {
     -- removed: bar ANY_TYPE
 );
 `
-	tables, _, err := parseDDL(sql)
+	tables, _, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestLoadFromDir_CommentOnlyFile(t *testing.T) {
 func TestParseDDL_CreateIndexConcurrently(t *testing.T) {
 	sql := `CREATE TABLE public.users (id integer, username character varying(255));
 CREATE INDEX CONCURRENTLY idx_users_username ON public.users (username);`
-	tables, indexes, err := parseDDL(sql)
+	tables, indexes, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ CREATE INDEX CONCURRENTLY idx_users_username ON public.users (username);`
 // TestParseDDL_CreateIndexWithoutConcurrentlyFails verifies that CREATE INDEX without CONCURRENTLY returns an error.
 func TestParseDDL_CreateIndexWithoutConcurrentlyFails(t *testing.T) {
 	sql := `CREATE INDEX idx_users_username ON public.users (username);`
-	_, _, err := parseDDL(sql)
+	_, _, _, err := parseDDL(sql)
 	if err == nil {
 		t.Fatal("expected error when CREATE INDEX does not use CONCURRENTLY")
 	}
@@ -271,7 +271,7 @@ func TestParseDDL_JSONB_TableWithCheckConstraint(t *testing.T) {
         (doc->'value') IS NOT NULL
     )
 );`
-	tables, indexes, err := parseDDL(sql)
+	tables, indexes, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestParseDDL_JSONB_TableWithCheckConstraint(t *testing.T) {
 // and preserves the ->> operator literally (no unicode escaping of '>').
 func TestParseDDL_JSONB_ExpressionIndex(t *testing.T) {
 	sql := `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_key_docs_key_kind ON public.key_docs (key, (doc->>'kind'));`
-	_, indexes, err := parseDDL(sql)
+	_, indexes, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestParseDDL_JSONB_ExpressionIndex(t *testing.T) {
 // so a SQL file using mixed-case names like "myKey" must produce "mykey" to match introspection.
 func TestParseDDL_ColumnNameCaseNormalized(t *testing.T) {
 	sql := `CREATE TABLE public.t (myKey text, PRIMARY KEY (myKey));`
-	tables, _, err := parseDDL(sql)
+	tables, _, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ CREATE TABLE public.child (
     id integer PRIMARY KEY,
     parent_code text REFERENCES public.parent (code)
 );`
-	tables, _, err := parseDDL(sql)
+	tables, _, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ CREATE TABLE public.environment_overrides (
     envValue text NOT NULL,
     PRIMARY KEY (envKey)
 );`
-	tables, indexes, err := parseDDL(sql)
+	tables, indexes, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
 	}
@@ -501,7 +501,7 @@ CREATE TABLE ` + ns + `.widgets (
 
 CREATE INDEX CONCURRENTLY idx_widgets_id ON ` + ns + `.widgets (id);
 `
-	tables, indexes, err := parseDDL(sql)
+	tables, indexes, _, err := parseDDL(sql)
 	if err != nil {
 		t.Fatalf("parseDDL: %v", err)
 	}

@@ -6,13 +6,25 @@ import (
 	"github.com/earlye/schemify/go/schemify/internal/schema"
 )
 
+func namespaceSet(names ...string) map[string]struct{} {
+	m := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		m[n] = struct{}{}
+	}
+	return m
+}
+
+func publicNamespaces() map[string]struct{} {
+	return namespaceSet("public")
+}
+
 func TestDiff_AddTable(t *testing.T) {
 	desired := map[string]*schema.Table{
 		"public.a": {Schema: "public", Name: "a", Columns: []schema.Column{{Name: "id", Type: "integer"}}},
 	}
 	actual := map[string]*schema.Table{}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive, got %v", dest)
 	}
@@ -40,7 +52,7 @@ func TestDiff_AddColumn(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive, got %v", dest)
 	}
@@ -69,7 +81,7 @@ func TestDiff_DropColumn_Destructive(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(add) != 0 {
 		t.Errorf("expected no additive, got %v", add)
 	}
@@ -87,7 +99,7 @@ func TestDiff_DropTable_Destructive(t *testing.T) {
 		"public.a": {Schema: "public", Name: "a", Columns: []schema.Column{{Name: "id", Type: "integer"}}},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(add) != 0 {
 		t.Errorf("expected no additive, got %v", add)
 	}
@@ -111,7 +123,7 @@ func TestDiff_DropTable_Allowed(t *testing.T) {
 		"public.b": {Schema: "public", Name: "b", Columns: []schema.Column{{Name: "id", Type: "integer"}}},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, allowDropTableDefs)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, allowDropTableDefs)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive, got %v", dest)
 	}
@@ -133,7 +145,7 @@ func TestDiff_DropTable_ColumnMismatch_Destructive(t *testing.T) {
 		"public.b": {Schema: "public", Name: "b", Columns: []schema.Column{{Name: "id", Type: "integer"}}},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, allowDropTableDefs)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, allowDropTableDefs)
 	if len(add) != 0 {
 		t.Errorf("expected no additive, got %v", add)
 	}
@@ -175,7 +187,7 @@ func TestDiff_DropColumn_AllowedByTypeMatch(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive, got %v", dest)
 	}
@@ -205,7 +217,7 @@ func TestDiff_DropColumn_AllowedByAnyType(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive, got %v", dest)
 	}
@@ -225,6 +237,7 @@ func TestDiff_Index_CreateIndex(t *testing.T) {
 	actualIdx := map[string]*schema.Index{}
 
 	add, dest := Diff(
+		publicNamespaces(), publicNamespaces(),
 		map[string]*schema.Table{"public.a": {Schema: "public", Name: "a", Columns: []schema.Column{{Name: "id", Type: "integer"}}}},
 		map[string]*schema.Table{"public.a": {Schema: "public", Name: "a", Columns: []schema.Column{{Name: "id", Type: "integer"}}}},
 		desiredIdx, actualIdx, nil)
@@ -257,7 +270,7 @@ func TestDiff_AddConstraint_PrimaryKey(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive, got %v", dest)
 	}
@@ -303,7 +316,7 @@ func TestDiff_HaveUnique_UnnamedConstraint_MatchesIntrospectionName(t *testing.T
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive changes, got %v", dest)
 	}
@@ -359,7 +372,7 @@ func TestDiff_HaveFK_UnnamedConstraint_MatchesIntrospectionName(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive changes, got %v", dest)
 	}
@@ -391,7 +404,7 @@ func TestDiff_ExtraUniqueInActual_Destructive(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(add) != 0 {
 		t.Fatalf("expected no additive migrations, got %v", add)
 	}
@@ -451,7 +464,7 @@ func TestDiff_ExtraForeignKeyInActual_Destructive(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(add) != 0 {
 		t.Fatalf("expected no additive migrations, got %v", add)
 	}
@@ -487,7 +500,7 @@ func TestDiff_EmptyConstraintNamesPanic(t *testing.T) {
 			t.Fatal("expected panic for empty unique constraint name")
 		}
 	}()
-	Diff(desired, actual, nil, nil, nil)
+	Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 }
 
 func TestDiff_HaveUnique_NamedConstraint_StillMatches(t *testing.T) {
@@ -512,7 +525,7 @@ func TestDiff_HaveUnique_NamedConstraint_StillMatches(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive changes, got %v", dest)
 	}
@@ -567,7 +580,7 @@ func TestDiff_HaveFK_NamedConstraint_StillMatches(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(dest) != 0 {
 		t.Fatalf("expected no destructive changes, got %v", dest)
 	}
@@ -588,6 +601,7 @@ func TestDiff_Index_DropIndex_Destructive(t *testing.T) {
 	}
 
 	add, dest := Diff(
+		publicNamespaces(), publicNamespaces(),
 		map[string]*schema.Table{"public.a": {Schema: "public", Name: "a", Columns: []schema.Column{{Name: "id", Type: "integer"}}}},
 		map[string]*schema.Table{"public.a": {Schema: "public", Name: "a", Columns: []schema.Column{{Name: "id", Type: "integer"}}}},
 		desiredIdx, actualIdx, nil)
@@ -641,7 +655,7 @@ func TestDiff_JSONB_ExpressionIndex_SecondRunIdempotent(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(tables, tables, desiredIdx, actualIdx, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), tables, tables, desiredIdx, actualIdx, nil)
 	if len(dest) != 0 {
 		t.Errorf("expected no destructive changes on second run, got %v", dest)
 	}
@@ -679,7 +693,7 @@ func TestDiff_ColumnNameCaseInsensitive(t *testing.T) {
 			PrimaryKey: &schema.PrimaryKeyConstraint{Columns: []string{"mykey"}},
 		},
 	}
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(add) != 0 {
 		t.Errorf("expected no additive migrations, got %v", add)
 	}
@@ -705,11 +719,64 @@ func TestDiff_DropColumn_TypeMismatch_StillDestructive(t *testing.T) {
 		},
 	}
 
-	add, dest := Diff(desired, actual, nil, nil, nil)
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil)
 	if len(add) != 0 {
 		t.Errorf("expected no additive, got %v", add)
 	}
 	if len(dest) != 1 || dest[0].Kind != "drop_column" || dest[0].Column != "name" {
 		t.Errorf("expected one destructive drop_column, got add=%v dest=%v", add, dest)
+	}
+}
+
+func TestDiff_CreateSchema_MissingNamespace(t *testing.T) {
+	desiredNs := namespaceSet("users")
+	actualNs := map[string]struct{}{}
+	add, dest := Diff(desiredNs, actualNs, map[string]*schema.Table{}, map[string]*schema.Table{}, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("unexpected destructive: %v", dest)
+	}
+	if len(add) != 1 || add[0].Kind != KindCreateSchema || add[0].Schema != "users" {
+		t.Fatalf("expected create_schema for users, got %v", add)
+	}
+}
+
+func TestDiff_CreateSchema_PublicWhenMissing(t *testing.T) {
+	desiredNs := namespaceSet("public")
+	actualNs := map[string]struct{}{}
+	desired := map[string]*schema.Table{
+		"public.foo": {Schema: "public", Name: "foo", Columns: []schema.Column{{Name: "id", Type: "integer"}}},
+	}
+	add, dest := Diff(desiredNs, actualNs, desired, map[string]*schema.Table{}, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("unexpected destructive: %v", dest)
+	}
+	if len(add) != 2 {
+		t.Fatalf("expected create_schema + create_table, got %d: %v", len(add), add)
+	}
+	if add[0].Kind != KindCreateSchema || add[0].Schema != "public" {
+		t.Fatalf("expected first migration create_schema public, got %v", add[0])
+	}
+}
+
+func TestDiff_DropSchema_Destructive(t *testing.T) {
+	desiredNs := namespaceSet("public")
+	actualNs := namespaceSet("public", "legacy")
+	add, dest := Diff(desiredNs, actualNs, map[string]*schema.Table{}, map[string]*schema.Table{}, nil, nil, nil)
+	if len(add) != 0 {
+		t.Fatalf("unexpected additive: %v", add)
+	}
+	if len(dest) != 1 || dest[0].Kind != "drop_schema" || dest[0].Schema != "legacy" {
+		t.Fatalf("expected drop_schema legacy, got add=%v dest=%v", add, dest)
+	}
+}
+
+func TestDiff_DropSchema_PublicNotDestructive(t *testing.T) {
+	desiredNs := map[string]struct{}{}
+	actualNs := namespaceSet("public")
+	_, dest := Diff(desiredNs, actualNs, map[string]*schema.Table{}, map[string]*schema.Table{}, nil, nil, nil)
+	for _, d := range dest {
+		if d.Kind == "drop_schema" {
+			t.Fatalf("public must not surface as drop_schema, got %v", dest)
+		}
 	}
 }

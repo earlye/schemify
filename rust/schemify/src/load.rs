@@ -10,13 +10,14 @@ use pg_query::protobuf::{
     ColumnDef, ConstrType, Constraint, CreateStmt, IndexElem, IndexStmt, Node, TypeName,
 };
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
 
 #[derive(Debug, Default)]
 pub struct LoadResult {
+    pub schemas: BTreeSet<String>,
     pub tables: HashMap<String, Table>,
     pub indexes: HashMap<String, Index>,
 }
@@ -30,6 +31,26 @@ static DROP_TABLE_COMMENT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*--\s*DROP TABLE\s+(\w+(?:\.\w+)?)\s*\(").expect("regex"));
 static DROP_TABLE_BLOCK_END_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*--\s*\)\s*;?\s*$").expect("regex"));
+static CREATE_SCHEMA_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_$]*))"#)
+        .expect("regex")
+});
+
+pub fn extract_create_schemas(sql: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for caps in CREATE_SCHEMA_RE.captures_iter(sql) {
+        let name = caps
+            .get(1)
+            .or_else(|| caps.get(2))
+            .map(|m| m.as_str().trim().to_lowercase())
+            .unwrap_or_default();
+        if name.is_empty() || crate::namespace::is_system_namespace(&name) {
+            continue;
+        }
+        out.insert(name);
+    }
+    out
+}
 
 pub fn load_from_dir(dir: impl AsRef<Path>) -> Result<LoadResult> {
     let dir = dir.as_ref();
@@ -49,12 +70,14 @@ pub fn load_from_dir(dir: impl AsRef<Path>) -> Result<LoadResult> {
 
     let mut tables = HashMap::new();
     let mut indexes = HashMap::new();
+    let mut schemas = BTreeSet::new();
 
     for name in entries {
         let body = fs::read_to_string(dir.join(&name))
             .map_err(|e| Error::LoadSchema(format!("read {name}: {e}")))?;
-        let (tbls, idxs) =
+        let (tbls, idxs, explicit) =
             parse_ddl(&body).map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
+        schemas.extend(explicit);
         for t in tbls {
             tables.insert(schema::table_key(&t.schema, &t.name), t);
         }
@@ -63,7 +86,11 @@ pub fn load_from_dir(dir: impl AsRef<Path>) -> Result<LoadResult> {
         }
     }
 
-    Ok(LoadResult { tables, indexes })
+    Ok(LoadResult {
+        schemas,
+        tables,
+        indexes,
+    })
 }
 
 pub fn load_allow_drop_table_defs(dir: impl AsRef<Path>) -> Result<HashMap<String, Table>> {
@@ -128,7 +155,7 @@ pub fn extract_drop_table_block_defs(raw_sql: &str) -> Result<HashMap<String, Ta
             sb.push('\n');
         }
         let create_sql = sb.replacen("DROP TABLE", "CREATE TABLE", 1);
-        let (tbls, _) = parse_ddl(&create_sql)?;
+        let (tbls, _, _) = parse_ddl(&create_sql)?;
         if let Some(t) = tbls.into_iter().next() {
             let key = schema::table_key(&t.schema, &t.name);
             out.insert(key, t);
@@ -161,13 +188,15 @@ pub fn extract_removed_directives(raw_sql: &str) -> Vec<AllowDropColumn> {
     out
 }
 
-pub fn parse_ddl(sql: &str) -> Result<(Vec<Table>, Vec<Index>)> {
+pub fn parse_ddl(sql: &str) -> Result<(Vec<Table>, Vec<Index>, BTreeSet<String>)> {
     let parsed = pg_query::parse(sql).map_err(|e| Error::ParseSql(e.to_string()))?;
     let mut tables = Vec::new();
     let mut indexes = Vec::new();
+    let mut explicit_schemas = extract_create_schemas(sql);
 
     for raw in &parsed.protobuf.stmts {
         let stmt_sql = slice_raw_stmt(sql, raw);
+        explicit_schemas.extend(extract_create_schemas(stmt_sql));
         let allow_drops = extract_removed_directives(stmt_sql);
 
         let Some(stmt_box) = &raw.stmt else {
@@ -196,7 +225,7 @@ pub fn parse_ddl(sql: &str) -> Result<(Vec<Table>, Vec<Index>)> {
         }
     }
 
-    Ok((tables, indexes))
+    Ok((tables, indexes, explicit_schemas))
 }
 
 fn slice_raw_stmt<'a>(full: &'a str, raw: &pg_query::protobuf::RawStmt) -> &'a str {

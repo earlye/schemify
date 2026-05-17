@@ -8,15 +8,21 @@ pub mod diff;
 pub mod error;
 pub mod helpers;
 pub mod load;
+pub mod namespace;
 pub mod schema;
 
 pub use apply::{ApplyOptions, apply, migration_sql};
-pub use db::{DatabaseConfig, IntrospectResult, connect, introspect};
+pub use db::{
+    DatabaseConfig, IntrospectResult, connect, introspect, introspect_all, list_user_schemas,
+};
 pub use diff::{DestructiveChange, Migration, MigrationDetail, diff_tables_and_indexes};
 pub use error::{Error, Result};
 pub use load::{
-    LoadResult, extract_drop_table_block_defs, extract_removed_directives,
+    LoadResult, extract_create_schemas, extract_drop_table_block_defs, extract_removed_directives,
     load_allow_drop_table_defs, load_from_dir, parse_ddl,
+};
+pub use namespace::{
+    collect_desired_namespaces, is_drop_schema_candidate, is_system_namespace, union_namespaces,
 };
 
 use db::connect as db_connect;
@@ -40,9 +46,15 @@ pub fn load_schema(dir: impl Into<PathBuf>) -> Result<LoadResult> {
 pub async fn plan(client: &Client, cfg: &Options) -> Result<Vec<Migration>> {
     let load_result = load_from_dir(&cfg.schema_dir)?;
     let allow_drop_table_defs = load_allow_drop_table_defs(&cfg.schema_dir)?;
-    let intro = introspect(client, "public").await?;
+    let desired_namespaces = collect_desired_namespaces(&load_result);
+    let actual_namespaces = list_user_schemas(client).await?;
+    let namespaces = union_namespaces(&desired_namespaces, &actual_namespaces);
+    let namespace_list: Vec<String> = namespaces;
+    let intro = introspect_all(client, &namespace_list).await?;
 
     let (migrations, disallowed) = diff_tables_and_indexes(
+        &desired_namespaces,
+        &actual_namespaces,
         &load_result.tables,
         &intro.tables,
         Some(&load_result.indexes),

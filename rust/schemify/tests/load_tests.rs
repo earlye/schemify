@@ -34,7 +34,7 @@ fn load_from_dir_reads_sql_files() {
 #[test]
 fn parse_ddl_single_table() {
     let sql = "CREATE TABLE public.foo (id integer, name character varying(100));";
-    let (tables, indexes) = parse_ddl(sql).unwrap();
+    let (tables, indexes, _) = parse_ddl(sql).unwrap();
     assert_eq!(tables.len(), 1);
     assert!(indexes.is_empty());
     let tbl = &tables[0];
@@ -54,7 +54,7 @@ fn parse_ddl_removed_directive() {
     -- removed: passwordhash character varying(64)
 );
 "#;
-    let (tables, _) = parse_ddl(sql).unwrap();
+    let (tables, _, _) = parse_ddl(sql).unwrap();
     assert_eq!(tables.len(), 1);
     assert_eq!(tables[0].allow_drop_columns.len(), 1);
     let a = &tables[0].allow_drop_columns[0];
@@ -66,7 +66,7 @@ fn parse_ddl_removed_directive() {
 fn parse_ddl_create_index_concurrently() {
     let sql = r#"CREATE TABLE public.users (id integer, username character varying(255));
 CREATE INDEX CONCURRENTLY idx_users_username ON public.users (username);"#;
-    let (tables, indexes) = parse_ddl(sql).unwrap();
+    let (tables, indexes, _) = parse_ddl(sql).unwrap();
     assert_eq!(tables.len(), 1);
     assert_eq!(indexes.len(), 1);
     let idx = &indexes[0];
@@ -87,7 +87,7 @@ fn parse_ddl_create_index_without_concurrently_fails() {
 #[test]
 fn parse_ddl_jsonb_expression_index() {
     let sql = "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_key_docs_key_kind ON public.key_docs (key, (doc->>'kind'));";
-    let (_, indexes) = parse_ddl(sql).unwrap();
+    let (_, indexes, _) = parse_ddl(sql).unwrap();
     assert_eq!(indexes.len(), 1);
     let idx = &indexes[0];
     assert_eq!(idx.name, "idx_key_docs_key_kind");
@@ -106,7 +106,7 @@ CREATE TABLE public.child (
     id integer PRIMARY KEY,
     parent_code text REFERENCES public.parent (code)
 );"#;
-    let (tables, _) = parse_ddl(sql).unwrap();
+    let (tables, _, _) = parse_ddl(sql).unwrap();
     assert_eq!(tables.len(), 2);
     let mut parent = None;
     let mut child = None;
@@ -139,7 +139,8 @@ CREATE TABLE {NS}.widgets (
 CREATE INDEX CONCURRENTLY idx_widgets_id ON {NS}.widgets (id);
 "#
     );
-    let (tables, indexes) = parse_ddl(&sql).unwrap();
+    let (tables, indexes, schemas) = parse_ddl(&sql).unwrap();
+    assert!(schemas.contains(NS));
     assert_eq!(tables.len(), 1);
     let tbl = &tables[0];
     assert_eq!(tbl.schema, NS);

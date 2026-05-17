@@ -1,11 +1,15 @@
 //! Port of Go `internal/diff/diff_test.go`.
 
 use schemify::diff::{
-    DestructiveChange, KIND_ADD_COLUMN, KIND_CREATE_TABLE, KIND_DROP_TABLE, MigrationDetail,
-    diff_tables_and_indexes, tables_match_for_drop,
+    DestructiveChange, KIND_ADD_COLUMN, KIND_CREATE_SCHEMA, KIND_CREATE_TABLE, KIND_DROP_TABLE,
+    MigrationDetail, diff_tables_and_indexes, tables_match_for_drop,
 };
 use schemify::schema::{Column, Index, Table, UniqueConstraint};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+fn public_namespaces() -> HashSet<String> {
+    ["public".into()].into_iter().collect()
+}
 
 fn diff(
     desired: HashMap<String, Table>,
@@ -14,7 +18,16 @@ fn diff(
     ai: Option<HashMap<String, Index>>,
     allow: Option<HashMap<String, Table>>,
 ) -> (Vec<schemify::diff::Migration>, Vec<DestructiveChange>) {
-    diff_tables_and_indexes(&desired, &actual, di.as_ref(), ai.as_ref(), allow.as_ref())
+    let ns = public_namespaces();
+    diff_tables_and_indexes(
+        &ns,
+        &ns,
+        &desired,
+        &actual,
+        di.as_ref(),
+        ai.as_ref(),
+        allow.as_ref(),
+    )
 }
 
 #[test]
@@ -286,4 +299,58 @@ fn col(name: &str, type_: &str) -> Column {
         nullable: true,
         default: String::new(),
     }
+}
+
+#[test]
+fn diff_create_schema_missing_namespace() {
+    let desired_ns: HashSet<String> = ["users".into()].into_iter().collect();
+    let actual_ns = HashSet::new();
+    let (add, dest) = diff_tables_and_indexes(
+        &desired_ns,
+        &actual_ns,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+        None,
+    );
+    assert!(dest.is_empty());
+    assert_eq!(add.len(), 1);
+    assert_eq!(add[0].kind, KIND_CREATE_SCHEMA);
+    assert_eq!(add[0].schema, "users");
+}
+
+#[test]
+fn diff_drop_schema_destructive() {
+    let desired_ns = public_namespaces();
+    let actual_ns: HashSet<String> = ["public".into(), "legacy".into()].into_iter().collect();
+    let (add, dest) = diff_tables_and_indexes(
+        &desired_ns,
+        &actual_ns,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+        None,
+    );
+    assert!(add.is_empty());
+    assert_eq!(dest.len(), 1);
+    assert_eq!(dest[0].kind, "drop_schema");
+    assert_eq!(dest[0].schema, "legacy");
+}
+
+#[test]
+fn diff_drop_schema_public_not_destructive() {
+    let desired_ns = HashSet::new();
+    let actual_ns = public_namespaces();
+    let (_, dest) = diff_tables_and_indexes(
+        &desired_ns,
+        &actual_ns,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+        None,
+        None,
+    );
+    assert!(!dest.iter().any(|d| d.kind == "drop_schema"));
 }
