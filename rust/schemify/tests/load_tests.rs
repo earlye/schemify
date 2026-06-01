@@ -78,6 +78,16 @@ CREATE INDEX CONCURRENTLY idx_users_username ON public.users (username);"#;
 }
 
 #[test]
+fn parse_ddl_create_index_concurrently_no_name_fails() {
+    let sql = "CREATE INDEX CONCURRENTLY ON public.users (username);";
+    let err = parse_ddl(sql).unwrap_err();
+    assert!(
+        err.to_string().contains("explicit name"),
+        "got {err}"
+    );
+}
+
+#[test]
 fn parse_ddl_create_index_without_concurrently_fails() {
     let sql = "CREATE INDEX idx_users_username ON public.users (username);";
     let err = parse_ddl(sql).unwrap_err();

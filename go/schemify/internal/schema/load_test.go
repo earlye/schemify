@@ -204,6 +204,18 @@ CREATE INDEX CONCURRENTLY idx_users_username ON public.users (username);`
 	}
 }
 
+// TestParseDDL_CreateIndexConcurrently_NoName verifies that CREATE INDEX CONCURRENTLY without an explicit name fails.
+func TestParseDDL_CreateIndexConcurrently_NoName(t *testing.T) {
+	sql := `CREATE INDEX CONCURRENTLY ON public.users (username);`
+	_, _, err := parseDDL(sql)
+	if err == nil {
+		t.Fatal("expected error when CREATE INDEX CONCURRENTLY has no explicit name")
+	}
+	if !strings.Contains(err.Error(), "explicit name") {
+		t.Errorf("error should mention explicit name: %v", err)
+	}
+}
+
 // TestParseDDL_CreateIndexWithoutConcurrentlyFails verifies that CREATE INDEX without CONCURRENTLY returns an error.
 func TestParseDDL_CreateIndexWithoutConcurrentlyFails(t *testing.T) {
 	sql := `CREATE INDEX idx_users_username ON public.users (username);`
