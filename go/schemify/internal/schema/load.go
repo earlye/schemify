@@ -343,6 +343,9 @@ func parseDDL(sql string) ([]*Table, []*Index, map[string]struct{}, error) {
 						break
 					}
 				}
+				if action.ObjectName == "" {
+					return nil, nil, fmt.Errorf("CREATE INDEX CONCURRENTLY on table %s.%s requires an explicit name (schemify rewrites it as IF NOT EXISTS <name>)", idxSchema, strings.ToLower(tbl.Name))
+				}
 				indexes = append(indexes, &Index{
 					Name:         strings.ToLower(action.ObjectName),
 					Schema:       idxSchema,

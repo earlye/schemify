@@ -267,6 +267,12 @@ fn parse_index_stmt(stmt: &IndexStmt) -> Result<Index> {
         idx_type = "btree".into();
     }
 
+    if stmt.idxname.is_empty() {
+        return Err(Error::ParseSql(
+            "CREATE INDEX CONCURRENTLY requires an explicit name (schemify rewrites it as IF NOT EXISTS <name>)".into(),
+        ));
+    }
+
     Ok(Index {
         name: stmt.idxname.to_lowercase(),
         schema: idx_schema,
