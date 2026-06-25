@@ -44,9 +44,10 @@ func stripOuterParens(s string) (string, bool) {
 	// closes before the end, meaning the outer parens are not a matched pair.
 	depth := 0
 	for i := 0; i < len(s)-1; i++ {
-		if s[i] == '(' {
+		switch s[i] {
+		case '(':
 			depth++
-		} else if s[i] == ')' {
+		case ')':
 			depth--
 			if depth == 0 {
 				return s, false
@@ -96,6 +97,9 @@ const (
 	KindAddPK        = "add_primary_key"
 	KindAddUnique    = "add_unique_key"
 	KindAddFK        = "add_foreign_key"
+	KindDropUnique   = "drop_unique_key"
+	KindDropFK       = "drop_foreign_key"
+	KindDropIndex    = "drop_index"
 )
 
 // Detail types — one per Kind.
@@ -108,16 +112,22 @@ type CreateIndexDetail struct{ Index *schema.Index }
 type AddPKDetail struct{ PrimaryKey *schema.PrimaryKeyConstraint }
 type AddUniqueDetail struct{ UniqueKey *schema.UniqueConstraint }
 type AddFKDetail struct{ ForeignKey *schema.ForeignKey }
+type DropUniqueDetail struct{ ConstraintName string }
+type DropFKDetail struct{ ConstraintName string }
+type DropIndexDetail struct{ Index *schema.Index }
 
 func (*CreateSchemaDetail) migrationDetail() {}
 func (*CreateTableDetail) migrationDetail()  {}
-func (*AddColumnDetail) migrationDetail()   {}
-func (*DropColumnDetail) migrationDetail()  {}
-func (*DropTableDetail) migrationDetail()   {}
-func (*CreateIndexDetail) migrationDetail() {}
-func (*AddPKDetail) migrationDetail()       {}
-func (*AddUniqueDetail) migrationDetail()   {}
-func (*AddFKDetail) migrationDetail()       {}
+func (*AddColumnDetail) migrationDetail()    {}
+func (*DropColumnDetail) migrationDetail()   {}
+func (*DropTableDetail) migrationDetail()    {}
+func (*CreateIndexDetail) migrationDetail()  {}
+func (*AddPKDetail) migrationDetail()        {}
+func (*AddUniqueDetail) migrationDetail()    {}
+func (*AddFKDetail) migrationDetail()        {}
+func (*DropUniqueDetail) migrationDetail()   {}
+func (*DropFKDetail) migrationDetail()       {}
+func (*DropIndexDetail) migrationDetail()    {}
 
 // Migration represents a single change to apply (additive or allowed destructive).
 type Migration struct {
@@ -235,12 +245,14 @@ func IndexMatches(actual, desired *schema.Index) bool {
 // allowDropTableDefs is the map of table key -> expected definition from "-- DROP TABLE ... (" blocks;
 // a table in actual but not desired is dropped only if its key is in the map and TablesMatchForDrop(actual, expected).
 // desiredIndexes/actualIndexes can be nil (no index diff). Index in actual but not in desired -> destructive drop_index.
+// driftGroups is the map of drift group ID -> DriftGroup from LoadDecoratedFromFS; pass nil if none.
 // Returns additive migrations to apply and any destructive changes (which must not be applied).
 func Diff(
 	desiredNamespaces, actualNamespaces map[string]struct{},
 	desired, actual map[string]*schema.Table,
 	desiredIndexes, actualIndexes map[string]*schema.Index,
 	allowDropTableDefs map[string]*schema.Table,
+	driftGroups map[string]*schema.DriftGroup,
 ) (migrations []Migration, disallowed []DestructiveChange) {
 	for ns := range desiredNamespaces {
 		if _, ok := actualNamespaces[ns]; !ok {
@@ -309,32 +321,43 @@ func Diff(
 		for _, c := range have.Columns {
 			if !wantCols[c.Name] {
 				allow, ok := allowDropByCol[c.Name]
-				if !ok {
+				if ok {
+					// Legacy "-- removed:" directive
+					actualType := c.Type
+					if allow.Type == "ANY_TYPE" || allow.Type == actualType {
+						migrations = append(migrations, Migration{
+							Kind:   KindDropColumn,
+							Schema: want.Schema,
+							Table:  want.Name,
+							Detail: &DropColumnDetail{ColumnName: c.Name},
+						})
+						continue
+					}
+				}
+				// Check drift groups
+				matched := false
+				for _, g := range driftGroups {
+					for _, antic := range g.AnticipatedColumns {
+						if antic.Name == c.Name && antic.Type == c.Type {
+							if g.Policy == schema.DriftPolicyDrop {
+								migrations = append(migrations, Migration{Kind: KindDropColumn, Schema: want.Schema, Table: want.Name, Detail: &DropColumnDetail{ColumnName: c.Name}})
+							} // else DEPRECATED: skip silently
+							matched = true
+							break
+						}
+					}
+					if matched {
+						break
+					}
+				}
+				if !matched {
 					disallowed = append(disallowed, DestructiveChange{
 						Kind:   "drop_column",
 						Schema: want.Schema,
 						Table:  want.Name,
 						Column: c.Name,
 					})
-					continue
 				}
-				// Allowed only if type matches exactly or directive is ANY_TYPE
-				actualType := c.Type
-				if allow.Type != "ANY_TYPE" && allow.Type != actualType {
-					disallowed = append(disallowed, DestructiveChange{
-						Kind:   "drop_column",
-						Schema: want.Schema,
-						Table:  want.Name,
-						Column: c.Name,
-					})
-					continue
-				}
-				migrations = append(migrations, Migration{
-					Kind:   KindDropColumn,
-					Schema: want.Schema,
-					Table:  want.Name,
-					Detail: &DropColumnDetail{ColumnName: c.Name},
-				})
 			}
 		}
 		// Columns in desired but not in actual -> add column
@@ -392,12 +415,29 @@ func Diff(
 		}
 		for _, u := range have.UniqueKeys {
 			if !haveUnique(u, want.UniqueKeys) {
-				disallowed = append(disallowed, DestructiveChange{
-					Kind:   "drop_unique_key",
-					Schema: want.Schema,
-					Table:  want.Name,
-					Name:   u.Name,
-				})
+				matched := false
+				for _, g := range driftGroups {
+					for _, antic := range g.AnticipatedUniqueKeys {
+						if antic.Name == u.Name {
+							if g.Policy == schema.DriftPolicyDrop {
+								migrations = append(migrations, Migration{Kind: KindDropUnique, Schema: want.Schema, Table: want.Name, Detail: &DropUniqueDetail{ConstraintName: u.Name}})
+							}
+							matched = true
+							break
+						}
+					}
+					if matched {
+						break
+					}
+				}
+				if !matched {
+					disallowed = append(disallowed, DestructiveChange{
+						Kind:   "drop_unique_key",
+						Schema: want.Schema,
+						Table:  want.Name,
+						Name:   u.Name,
+					})
+				}
 			}
 		}
 		for _, fk := range want.ForeignKeys {
@@ -413,12 +453,29 @@ func Diff(
 		}
 		for _, fk := range have.ForeignKeys {
 			if !haveFK(fk, want.ForeignKeys) {
-				disallowed = append(disallowed, DestructiveChange{
-					Kind:   "drop_foreign_key",
-					Schema: want.Schema,
-					Table:  want.Name,
-					Name:   fk.Name,
-				})
+				matched := false
+				for _, g := range driftGroups {
+					for _, antic := range g.AnticipatedForeignKeys {
+						if antic.Name == fk.Name {
+							if g.Policy == schema.DriftPolicyDrop {
+								migrations = append(migrations, Migration{Kind: KindDropFK, Schema: want.Schema, Table: want.Name, Detail: &DropFKDetail{ConstraintName: fk.Name}})
+							}
+							matched = true
+							break
+						}
+					}
+					if matched {
+						break
+					}
+				}
+				if !matched {
+					disallowed = append(disallowed, DestructiveChange{
+						Kind:   "drop_foreign_key",
+						Schema: want.Schema,
+						Table:  want.Name,
+						Name:   fk.Name,
+					})
+				}
 			}
 		}
 	}
@@ -438,11 +495,28 @@ func Diff(
 		}
 		for key, haveIdx := range actualIndexes {
 			if desiredIndexes[key] == nil {
-				disallowed = append(disallowed, DestructiveChange{
-					Kind:   "drop_index",
-					Schema: haveIdx.Schema,
-					Index:  haveIdx.Name,
-				})
+				matched := false
+				for _, g := range driftGroups {
+					for _, antic := range g.AnticipatedIndexes {
+						if IndexMatches(haveIdx, antic) && haveIdx.Name == antic.Name {
+							if g.Policy == schema.DriftPolicyDrop {
+								migrations = append(migrations, Migration{Kind: KindDropIndex, Schema: haveIdx.Schema, Table: haveIdx.TableName, Detail: &DropIndexDetail{Index: haveIdx}})
+							}
+							matched = true
+							break
+						}
+					}
+					if matched {
+						break
+					}
+				}
+				if !matched {
+					disallowed = append(disallowed, DestructiveChange{
+						Kind:   "drop_index",
+						Schema: haveIdx.Schema,
+						Index:  haveIdx.Name,
+					})
+				}
 			}
 		}
 	}
@@ -467,12 +541,18 @@ func migrationKindRank(kind string) int {
 		return 5
 	case KindCreateIndex:
 		return 6
-	case KindDropColumn:
+	case KindDropUnique:
 		return 7
-	case KindDropTable:
+	case KindDropFK:
 		return 8
-	default:
+	case KindDropIndex:
 		return 9
+	case KindDropColumn:
+		return 10
+	case KindDropTable:
+		return 11
+	default:
+		return 12
 	}
 }
 
@@ -480,6 +560,8 @@ func migrationSortKey(m Migration) (int, string, string, string) {
 	idx := ""
 	switch d := m.Detail.(type) {
 	case *CreateIndexDetail:
+		idx = d.Index.Name
+	case *DropIndexDetail:
 		idx = d.Index.Name
 	}
 	return migrationKindRank(m.Kind), m.Schema, m.Table, idx
@@ -549,7 +631,7 @@ func topoSortCreateTable(migrations []Migration) []Migration {
 
 	// Kahn's algorithm.
 	var queue []int
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if inDegree[i] == 0 {
 			queue = append(queue, i)
 		}

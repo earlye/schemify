@@ -35,7 +35,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 	// Split: create_index must run outside transaction (CONCURRENTLY); rest in one tx.
 	var inTx, outTx []diff.Migration
 	for _, m := range migrations {
-		if m.Kind == diff.KindCreateIndex {
+		if m.Kind == diff.KindCreateIndex || m.Kind == diff.KindDropIndex {
 			outTx = append(outTx, m)
 		} else {
 			inTx = append(inTx, m)
@@ -98,6 +98,12 @@ func migrationSQL(m diff.Migration) (string, error) {
 		return addUniqueSQL(m.Schema, m.Table, d.UniqueKey), nil
 	case *diff.AddFKDetail:
 		return addFKSQL(m.Schema, m.Table, d.ForeignKey), nil
+	case *diff.DropUniqueDetail:
+		return fmt.Sprintf("ALTER TABLE %s.%s DROP CONSTRAINT IF EXISTS %s", m.Schema, m.Table, d.ConstraintName), nil
+	case *diff.DropFKDetail:
+		return fmt.Sprintf("ALTER TABLE %s.%s DROP CONSTRAINT IF EXISTS %s", m.Schema, m.Table, d.ConstraintName), nil
+	case *diff.DropIndexDetail:
+		return fmt.Sprintf("DROP INDEX CONCURRENTLY IF EXISTS %s.%s", d.Index.Schema, d.Index.Name), nil
 	default:
 		return "", fmt.Errorf("unknown migration detail: %T", m.Detail)
 	}
@@ -201,7 +207,7 @@ func addColumnSQL(schema, table string, c *schema.Column) string {
 }
 
 func dropColumnSQL(schema, table, columnName string) string {
-	return fmt.Sprintf("ALTER TABLE %s.%s DROP COLUMN %s", schema, table, columnName)
+	return fmt.Sprintf("ALTER TABLE %s.%s DROP COLUMN IF EXISTS %s", schema, table, columnName)
 }
 
 func dropTableSQL(schema, table string) string {
