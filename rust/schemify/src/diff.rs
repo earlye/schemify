@@ -462,15 +462,22 @@ pub fn diff_tables_and_indexes(
                 .get(&schema::index_key(&have_idx.schema, &have_idx.name))
                 .is_none()
             {
-                disallowed.push(DestructiveChange {
-                    kind: "drop_index".into(),
-                    schema: have_idx.schema.clone(),
-                    table: String::new(),
-                    column: String::new(),
-                    index: have_idx.name.clone(),
-                    name: String::new(),
-                    detail: String::new(),
+                let table_being_dropped = migrations.iter().any(|m| {
+                    m.kind == KIND_DROP_TABLE
+                        && m.schema == have_idx.table_schema
+                        && m.table == have_idx.table_name
                 });
+                if !table_being_dropped {
+                    disallowed.push(DestructiveChange {
+                        kind: "drop_index".into(),
+                        schema: have_idx.schema.clone(),
+                        table: String::new(),
+                        column: String::new(),
+                        index: have_idx.name.clone(),
+                        name: String::new(),
+                        detail: String::new(),
+                    });
+                }
             }
         }
     }
