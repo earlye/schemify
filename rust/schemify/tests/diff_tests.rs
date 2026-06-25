@@ -27,6 +27,7 @@ fn diff(
         di.as_ref(),
         ai.as_ref(),
         allow.as_ref(),
+        None,
     )
 }
 
@@ -313,6 +314,7 @@ fn diff_create_schema_missing_namespace() {
         None,
         None,
         None,
+        None,
     );
     assert!(dest.is_empty());
     assert_eq!(add.len(), 1);
@@ -332,6 +334,7 @@ fn diff_drop_schema_destructive() {
         None,
         None,
         None,
+        None,
     );
     assert!(add.is_empty());
     assert_eq!(dest.len(), 1);
@@ -348,6 +351,7 @@ fn diff_drop_schema_public_not_destructive() {
         &actual_ns,
         &HashMap::new(),
         &HashMap::new(),
+        None,
         None,
         None,
         None,

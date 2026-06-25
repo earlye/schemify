@@ -1,6 +1,8 @@
 //! Compare desired vs actual schema (ported from Go internal/diff).
 
-use crate::schema::{self, ForeignKey, Index, PrimaryKeyConstraint, Table, UniqueConstraint};
+use crate::schema::{
+    self, DriftGroup, DriftPolicy, ForeignKey, Index, PrimaryKeyConstraint, Table, UniqueConstraint,
+};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -14,6 +16,9 @@ pub const KIND_CREATE_INDEX: &str = "create_index";
 pub const KIND_ADD_PK: &str = "add_primary_key";
 pub const KIND_ADD_UNIQUE: &str = "add_unique_key";
 pub const KIND_ADD_FK: &str = "add_foreign_key";
+pub const KIND_DROP_UNIQUE: &str = "drop_unique_key";
+pub const KIND_DROP_FK: &str = "drop_foreign_key";
+pub const KIND_DROP_INDEX: &str = "drop_index";
 
 #[derive(Debug, Clone)]
 pub enum MigrationDetail {
@@ -26,6 +31,9 @@ pub enum MigrationDetail {
     AddPrimaryKey { primary_key: PrimaryKeyConstraint },
     AddUniqueKey { unique_key: UniqueConstraint },
     AddForeignKey { foreign_key: ForeignKey },
+    DropUnique { constraint_name: String },
+    DropFk { constraint_name: String },
+    DropIndex { index: Index },
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +225,7 @@ fn describe_column_drift(actual: &Table, expected: &Table) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn diff_tables_and_indexes(
     desired_namespaces: &HashSet<String>,
     actual_namespaces: &HashSet<String>,
@@ -225,6 +234,7 @@ pub fn diff_tables_and_indexes(
     desired_indexes: Option<&HashMap<String, Index>>,
     actual_indexes: Option<&HashMap<String, Index>>,
     allow_drop_table_defs: Option<&HashMap<String, Table>>,
+    drift_groups: Option<&HashMap<String, DriftGroup>>,
 ) -> (Vec<Migration>, Vec<DestructiveChange>) {
     let mut migrations = Vec::new();
     let mut disallowed = Vec::new();
@@ -304,37 +314,77 @@ pub fn diff_tables_and_indexes(
         }
         for c in &have.columns {
             if !want_cols.contains(c.name.as_str()) {
-                let Some(allow) = allow_drop_by_col.get(c.name.as_str()) else {
-                    disallowed.push(DestructiveChange {
-                        kind: "drop_column".into(),
-                        schema: want.schema.clone(),
-                        table: want.name.clone(),
-                        column: c.name.clone(),
-                        index: String::new(),
-                        name: String::new(),
-                        detail: String::new(),
-                    });
-                    continue;
+                // First check allow_drop_by_col (legacy mechanism).
+                let allow_drop_matched = if let Some(allow) = allow_drop_by_col.get(c.name.as_str())
+                {
+                    allow.type_ == "ANY_TYPE" || allow.type_ == c.type_
+                } else {
+                    false
                 };
-                if allow.type_ != "ANY_TYPE" && allow.type_ != c.type_ {
-                    disallowed.push(DestructiveChange {
-                        kind: "drop_column".into(),
+
+                if allow_drop_matched {
+                    migrations.push(Migration {
+                        kind: KIND_DROP_COLUMN,
                         schema: want.schema.clone(),
                         table: want.name.clone(),
-                        column: c.name.clone(),
-                        index: String::new(),
-                        name: String::new(),
-                        detail: String::new(),
+                        detail: MigrationDetail::DropColumn {
+                            column_name: c.name.clone(),
+                        },
                     });
                     continue;
                 }
-                migrations.push(Migration {
-                    kind: KIND_DROP_COLUMN,
+
+                // Then check drift groups.
+                if let Some(groups) = drift_groups {
+                    let mut matched_drop = false;
+                    let mut matched_deprecated = false;
+                    'outer_col: for group in groups.values() {
+                        for antic in &group.anticipated_columns {
+                            if antic.name == c.name
+                                && (antic.type_ == c.type_ || antic.type_ == "ANY_TYPE")
+                            {
+                                match group.policy {
+                                    DriftPolicy::Drop => {
+                                        matched_drop = true;
+                                    }
+                                    DriftPolicy::Deprecated => {
+                                        matched_deprecated = true;
+                                    }
+                                }
+                                break 'outer_col;
+                            }
+                        }
+                    }
+                    if matched_drop {
+                        migrations.push(Migration {
+                            kind: KIND_DROP_COLUMN,
+                            schema: want.schema.clone(),
+                            table: want.name.clone(),
+                            detail: MigrationDetail::DropColumn {
+                                column_name: c.name.clone(),
+                            },
+                        });
+                        continue;
+                    }
+                    if matched_deprecated {
+                        tracing::debug!(
+                            column = %c.name,
+                            table = %want.name,
+                            "DEPRECATED column tolerated"
+                        );
+                        continue;
+                    }
+                }
+
+                // Fall through to disallowed.
+                disallowed.push(DestructiveChange {
+                    kind: "drop_column".into(),
                     schema: want.schema.clone(),
                     table: want.name.clone(),
-                    detail: MigrationDetail::DropColumn {
-                        column_name: c.name.clone(),
-                    },
+                    column: c.name.clone(),
+                    index: String::new(),
+                    name: String::new(),
+                    detail: String::new(),
                 });
             }
         }
@@ -402,8 +452,28 @@ pub fn diff_tables_and_indexes(
                 });
             }
         }
-        for u in &have.unique_keys {
+        'unique_loop: for u in &have.unique_keys {
             if !have_unique(u, &want.unique_keys) {
+                if let Some(groups) = drift_groups {
+                    for group in groups.values() {
+                        for au in &group.anticipated_unique_keys {
+                            if au.name == u.name && slice_equal(&au.columns, &u.columns) {
+                                if group.policy == DriftPolicy::Drop {
+                                    migrations.push(Migration {
+                                        kind: KIND_DROP_UNIQUE,
+                                        schema: want.schema.clone(),
+                                        table: want.name.clone(),
+                                        detail: MigrationDetail::DropUnique {
+                                            constraint_name: u.name.clone(),
+                                        },
+                                    });
+                                }
+                                // Both Drop (already pushed) and Deprecated (tolerate) skip disallowed.
+                                continue 'unique_loop;
+                            }
+                        }
+                    }
+                }
                 disallowed.push(DestructiveChange {
                     kind: "drop_unique_key".into(),
                     schema: want.schema.clone(),
@@ -428,8 +498,28 @@ pub fn diff_tables_and_indexes(
                 });
             }
         }
-        for fk in &have.foreign_keys {
+        'fk_loop: for fk in &have.foreign_keys {
             if !have_fk(fk, &want.foreign_keys) {
+                if let Some(groups) = drift_groups {
+                    for group in groups.values() {
+                        for afk in &group.anticipated_foreign_keys {
+                            if afk.name == fk.name && slice_equal(&afk.columns, &fk.columns) {
+                                if group.policy == DriftPolicy::Drop {
+                                    migrations.push(Migration {
+                                        kind: KIND_DROP_FK,
+                                        schema: want.schema.clone(),
+                                        table: want.name.clone(),
+                                        detail: MigrationDetail::DropFk {
+                                            constraint_name: fk.name.clone(),
+                                        },
+                                    });
+                                }
+                                // Both Drop and Deprecated skip disallowed.
+                                continue 'fk_loop;
+                            }
+                        }
+                    }
+                }
                 disallowed.push(DestructiveChange {
                     kind: "drop_foreign_key".into(),
                     schema: want.schema.clone(),
@@ -457,11 +547,31 @@ pub fn diff_tables_and_indexes(
                 });
             }
         }
-        for (_key, have_idx) in ai {
+        'idx_loop: for (_key, have_idx) in ai {
             if di
                 .get(&schema::index_key(&have_idx.schema, &have_idx.name))
                 .is_none()
             {
+                if let Some(groups) = drift_groups {
+                    for group in groups.values() {
+                        for aidx in &group.anticipated_indexes {
+                            if index_matches(Some(have_idx), Some(aidx)) {
+                                if group.policy == DriftPolicy::Drop {
+                                    migrations.push(Migration {
+                                        kind: KIND_DROP_INDEX,
+                                        schema: have_idx.schema.clone(),
+                                        table: have_idx.table_name.clone(),
+                                        detail: MigrationDetail::DropIndex {
+                                            index: have_idx.clone(),
+                                        },
+                                    });
+                                }
+                                // Both Drop and Deprecated skip disallowed.
+                                continue 'idx_loop;
+                            }
+                        }
+                    }
+                }
                 disallowed.push(DestructiveChange {
                     kind: "drop_index".into(),
                     schema: have_idx.schema.clone(),
@@ -490,7 +600,10 @@ fn migration_kind_rank(kind: &str) -> i32 {
         KIND_CREATE_INDEX => 6,
         KIND_DROP_COLUMN => 7,
         KIND_DROP_TABLE => 8,
-        _ => 9,
+        KIND_DROP_UNIQUE => 9,
+        KIND_DROP_FK => 10,
+        KIND_DROP_INDEX => 11,
+        _ => 12,
     }
 }
 

@@ -114,3 +114,53 @@ pub fn normalize_info_schema_type(t: &str) -> String {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum DriftPolicy {
+    #[default]
+    Drop,
+    Deprecated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DriftScope {
+    Table,
+    File,
+}
+
+#[derive(Debug, Clone)]
+pub struct DriftBlock {
+    pub id: String,
+    pub policy: DriftPolicy,
+    pub raw_body: String,
+    pub scope: DriftScope,
+    pub table_schema: String,
+    pub table_name: String,
+    pub anticipated_table: Option<Table>,
+    pub anticipated_indexes: Vec<Index>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DecoratedTable {
+    pub table: Table,
+    pub drift_blocks: Vec<DriftBlock>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DriftGroup {
+    pub id: String,
+    pub policy: DriftPolicy,
+    pub anticipated_columns: Vec<Column>,
+    pub anticipated_unique_keys: Vec<UniqueConstraint>,
+    pub anticipated_foreign_keys: Vec<ForeignKey>,
+    pub anticipated_indexes: Vec<Index>,
+}
+
+pub struct DecoratedLoadResult {
+    pub schemas: std::collections::BTreeSet<String>,
+    pub tables: std::collections::HashMap<String, Table>,
+    pub indexes: std::collections::HashMap<String, Index>,
+    pub decorated_tables: std::collections::HashMap<String, DecoratedTable>,
+    pub file_level_drift: Vec<DriftBlock>,
+    pub drift_groups: std::collections::HashMap<String, DriftGroup>,
+}
