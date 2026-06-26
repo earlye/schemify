@@ -50,7 +50,26 @@ func Diff(
 	desiredIndexes, actualIndexes map[string]*schema.Index,
 	allowDropTableDefs map[string]*schema.Table,
 ) (migrations []diff.Migration, disallowed []diff.DestructiveChange) {
-	return diff.Diff(desiredNamespaces, actualNamespaces, desired, actual, desiredIndexes, actualIndexes, allowDropTableDefs)
+	return diff.Diff(desiredNamespaces, actualNamespaces, desired, actual, desiredIndexes, actualIndexes, allowDropTableDefs, nil)
+}
+
+// DiffWithDrift is like Diff but also accepts drift groups from LoadDecoratedSchema.
+// Surplus objects covered by a DROP group become allowed drop migrations; those covered
+// by a DEPRECATED group are silently tolerated (neither migration nor disallowed).
+func DiffWithDrift(
+	desiredNamespaces, actualNamespaces map[string]struct{},
+	desired, actual map[string]*schema.Table,
+	desiredIndexes, actualIndexes map[string]*schema.Index,
+	allowDropTableDefs map[string]*schema.Table,
+	driftGroups map[string]*schema.DriftGroup,
+) (migrations []diff.Migration, disallowed []diff.DestructiveChange) {
+	return diff.Diff(desiredNamespaces, actualNamespaces, desired, actual, desiredIndexes, actualIndexes, allowDropTableDefs, driftGroups)
+}
+
+// LoadDecoratedSchema reads desired schema from SQL files in fsys and returns a DecoratedLoadResult
+// which includes drift block information extracted from DRIFT comment blocks.
+func LoadDecoratedSchema(fsys fs.FS) (*schema.DecoratedLoadResult, error) {
+	return schema.LoadDecoratedFromFS(fsys)
 }
 
 // LoadAllowDropTableDefs reads "-- DROP TABLE ... (" ... "-- );" blocks from SQL files in fsys,
@@ -67,12 +86,12 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, migrations []diff.Migration,
 // Plan computes the minimal set of migrations to apply to the database, and enforces
 // that destructive changes are disallowed (barring overrides).
 func Plan(ctx context.Context, cfg *Options, pool *pgxpool.Pool) ([]Migration, error) {
-	loadResult, err := LoadSchema(cfg.Schema)
+	decorated, err := LoadDecoratedSchema(cfg.Schema)
 	if err != nil {
 		return nil, errors.WrapPrefix(err, "load schema", 0)
 	}
 
-	desiredNamespaces := schema.CollectDesiredNamespaces(loadResult)
+	desiredNamespaces := schema.CollectDesiredNamespaces(&decorated.LoadResult)
 	actualNamespaces, err := db.ListUserSchemas(ctx, pool)
 	if err != nil {
 		return nil, errors.WrapPrefix(err, "list schemas", 0)
@@ -88,11 +107,12 @@ func Plan(ctx context.Context, cfg *Options, pool *pgxpool.Pool) ([]Migration, e
 		return nil, errors.WrapPrefix(err, "load allow-drop table defs", 0)
 	}
 
-	migrations, disallowed := Diff(
+	migrations, disallowed := diff.Diff(
 		desiredNamespaces, actualNamespaces,
-		loadResult.Tables, introResult.Tables,
-		loadResult.Indexes, introResult.Indexes,
+		decorated.Tables, introResult.Tables,
+		decorated.Indexes, introResult.Indexes,
 		allowDropTableDefs,
+		decorated.DriftGroups,
 	)
 	if len(disallowed) > 0 {
 		var msg []string

@@ -207,7 +207,7 @@ CREATE INDEX CONCURRENTLY idx_users_username ON public.users (username);`
 // TestParseDDL_CreateIndexConcurrently_NoName verifies that CREATE INDEX CONCURRENTLY without an explicit name fails.
 func TestParseDDL_CreateIndexConcurrently_NoName(t *testing.T) {
 	sql := `CREATE INDEX CONCURRENTLY ON public.users (username);`
-	_, _, err := parseDDL(sql)
+	_, _, _, err := parseDDL(sql)
 	if err == nil {
 		t.Fatal("expected error when CREATE INDEX CONCURRENTLY has no explicit name")
 	}

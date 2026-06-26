@@ -316,6 +316,174 @@ func itestCleanupNamespace(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	}
 }
 
+// itestDriftBaselineSQL creates a table with a legacy_code column and an index on it.
+const itestDriftBaselineSQL = `
+CREATE TABLE public.schemify_itest_drift_things (
+    id BIGSERIAL,
+    name TEXT NOT NULL,
+    legacy_code TEXT NOT NULL
+);
+
+CREATE INDEX CONCURRENTLY idx_schemify_itest_drift_things_legacy ON public.schemify_itest_drift_things (legacy_code);
+`
+
+// itestDriftDropSQL removes legacy_code and its index via DRIFT DROP blocks.
+const itestDriftDropSQL = `
+CREATE TABLE public.schemify_itest_drift_things (
+    id BIGSERIAL,
+    name TEXT NOT NULL
+    -- DRIFT cleanup1 DROP (
+    --   legacy_code TEXT NOT NULL
+    -- )
+);
+
+-- DRIFT cleanup1 DROP (
+-- CREATE INDEX CONCURRENTLY idx_schemify_itest_drift_things_legacy ON public.schemify_itest_drift_things (legacy_code);
+-- )
+`
+
+// itestDriftDeprecatedSQL removes legacy_code from desired but marks it DEPRECATED (tolerated).
+// No index is desired so the surplus index is handled by a DROP group.
+const itestDriftDeprecatedSQL = `
+CREATE TABLE public.schemify_itest_drift_things (
+    id BIGSERIAL,
+    name TEXT NOT NULL
+    -- DRIFT tolerate1 DEPRECATED (
+    --   legacy_code TEXT NOT NULL
+    -- )
+);
+
+-- DRIFT cleanup1 DROP (
+-- CREATE INDEX CONCURRENTLY idx_schemify_itest_drift_things_legacy ON public.schemify_itest_drift_things (legacy_code);
+-- )
+`
+
+func itestCleanupDrift(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS public.schemify_itest_drift_things CASCADE"); err != nil {
+		t.Logf("cleanup drift: %v", err)
+	}
+}
+
+func itestApplyDecorated(t *testing.T, ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, label string) []schemify.Migration {
+	t.Helper()
+	decorated, err := schemify.LoadDecoratedSchema(fsys)
+	if err != nil {
+		t.Fatalf("%s: LoadDecoratedSchema: %v", label, err)
+	}
+	actual, err := schemify.Introspect(ctx, pool, "public")
+	if err != nil {
+		t.Fatalf("%s: Introspect: %v", label, err)
+	}
+	actualTables := itestFilterTables(actual.Tables, "schemify_itest_drift_")
+	actualIndexes := itestFilterIndexes(actual.Indexes, "schemify_itest_drift_")
+	desiredNs := schema.CollectDesiredNamespaces(&decorated.LoadResult)
+	actualNs := itestFilterNamespaces(t, ctx, pool, "public")
+
+	migrations, disallowed := schemify.DiffWithDrift(
+		desiredNs, actualNs,
+		decorated.Tables, actualTables,
+		decorated.Indexes, actualIndexes,
+		nil,
+		decorated.DriftGroups,
+	)
+	if len(disallowed) > 0 {
+		t.Fatalf("%s: Diff produced disallowed changes: %v", label, disallowed)
+	}
+	if err := schemify.Apply(ctx, pool, migrations, schemify.ApplyOptions{}); err != nil {
+		t.Fatalf("%s: Apply: %v", label, err)
+	}
+	return migrations
+}
+
+// TestIntegration_DriftDrop verifies that surplus columns and indexes covered by a
+// DRIFT DROP block are planned as allowed drop migrations rather than disallowed changes.
+func TestIntegration_DriftDrop(t *testing.T) {
+	ctx := context.Background()
+	pool := itestPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+	itestCleanupDrift(t, ctx, pool)
+	t.Cleanup(func() { itestCleanupDrift(t, ctx, pool) })
+
+	baselineFS := fstest.MapFS{"schema.sql": &fstest.MapFile{Data: []byte(itestDriftBaselineSQL)}}
+	dropFS := fstest.MapFS{"schema.sql": &fstest.MapFile{Data: []byte(itestDriftDropSQL)}}
+
+	run1 := itestApplyDecorated(t, ctx, pool, baselineFS, "baseline")
+	if len(run1) == 0 {
+		t.Fatal("baseline: expected at least one migration, got none")
+	}
+
+	run2 := itestApplyDecorated(t, ctx, pool, dropFS, "drift-drop")
+	var sawDropColumn, sawDropIndex bool
+	for _, m := range run2 {
+		if m.Kind == "drop_column" && m.Table == "schemify_itest_drift_things" {
+			sawDropColumn = true
+		}
+		if m.Kind == "drop_index" {
+			sawDropIndex = true
+		}
+	}
+	if !sawDropColumn {
+		t.Errorf("drift-drop: expected drop_column migration for legacy_code, got %v", run2)
+	}
+	if !sawDropIndex {
+		t.Errorf("drift-drop: expected drop_index migration for legacy index, got %v", run2)
+	}
+
+	// Third run must be idempotent.
+	run3 := itestApplyDecorated(t, ctx, pool, dropFS, "idempotent")
+	if len(run3) != 0 {
+		t.Errorf("idempotent run: expected no migrations, got %v", run3)
+	}
+}
+
+// TestIntegration_DriftDeprecated verifies that surplus columns covered by a
+// DRIFT DEPRECATED block produce neither migrations nor disallowed changes.
+func TestIntegration_DriftDeprecated(t *testing.T) {
+	ctx := context.Background()
+	pool := itestPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+	itestCleanupDrift(t, ctx, pool)
+	t.Cleanup(func() { itestCleanupDrift(t, ctx, pool) })
+
+	baselineFS := fstest.MapFS{"schema.sql": &fstest.MapFile{Data: []byte(itestDriftBaselineSQL)}}
+	deprecatedFS := fstest.MapFS{"schema.sql": &fstest.MapFile{Data: []byte(itestDriftDeprecatedSQL)}}
+
+	itestApplyDecorated(t, ctx, pool, baselineFS, "baseline")
+
+	// Now diff the deprecated schema. The column is surplus but DEPRECATED → tolerated.
+	// The index is surplus and covered by a DROP group → drop migration.
+	decorated, err := schemify.LoadDecoratedSchema(deprecatedFS)
+	if err != nil {
+		t.Fatalf("LoadDecoratedSchema: %v", err)
+	}
+	actual, err := schemify.Introspect(ctx, pool, "public")
+	if err != nil {
+		t.Fatalf("Introspect: %v", err)
+	}
+	actualTables := itestFilterTables(actual.Tables, "schemify_itest_drift_")
+	actualIndexes := itestFilterIndexes(actual.Indexes, "schemify_itest_drift_")
+	desiredNs := schema.CollectDesiredNamespaces(&decorated.LoadResult)
+	actualNs := itestFilterNamespaces(t, ctx, pool, "public")
+
+	migrations, disallowed := schemify.DiffWithDrift(
+		desiredNs, actualNs,
+		decorated.Tables, actualTables,
+		decorated.Indexes, actualIndexes,
+		nil,
+		decorated.DriftGroups,
+	)
+	if len(disallowed) > 0 {
+		t.Errorf("DriftDeprecated: expected no disallowed changes, got %v", disallowed)
+	}
+	// Only the index drop should be a migration; no column drop.
+	for _, m := range migrations {
+		if m.Kind == "drop_column" {
+			t.Errorf("DriftDeprecated: unexpected drop_column migration (column should be tolerated): %v", m)
+		}
+	}
+}
+
 // itestPool connects to PostgreSQL using the same env vars as the CLI
 // (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE).
 // The test is skipped rather than failed if the database is unreachable.

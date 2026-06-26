@@ -2,10 +2,10 @@
 //! Skips if `DB_HOST` / default localhost:5432 is unreachable.
 
 use schemify::apply::{ApplyOptions, apply};
+use schemify::collect_desired_namespaces;
 use schemify::db::{DatabaseConfig, connect, introspect, list_user_schemas};
 use schemify::diff::diff_tables_and_indexes;
 use schemify::load::load_from_dir;
-use schemify::collect_desired_namespaces;
 use schemify::schema::{Index, Table};
 use std::collections::HashMap;
 use std::fs;
@@ -177,6 +177,7 @@ async fn itest_apply(
         Some(&desired.indexes),
         Some(&actual_indexes),
         None,
+        None,
     );
     assert!(disallowed.is_empty(), "{label}: disallowed: {disallowed:?}");
     apply(client, &migrations, &ApplyOptions::default())
@@ -221,22 +222,10 @@ async fn integration_non_public_schema_idempotency() {
     let dir = tempdir().unwrap();
     fs::write(dir.path().join("schema.sql"), ITEST_NS_SCHEMA_SQL).unwrap();
 
-    let run1 = itest_apply(
-        &mut client,
-        dir.path(),
-        "first run",
-        ITEST_NS_SCHEMA,
-    )
-    .await;
+    let run1 = itest_apply(&mut client, dir.path(), "first run", ITEST_NS_SCHEMA).await;
     assert!(!run1.is_empty(), "first run: expected migrations");
 
-    let run2 = itest_apply(
-        &mut client,
-        dir.path(),
-        "second run",
-        ITEST_NS_SCHEMA,
-    )
-    .await;
+    let run2 = itest_apply(&mut client, dir.path(), "second run", ITEST_NS_SCHEMA).await;
     assert!(
         run2.is_empty(),
         "second run: expected idempotency, got {run2:?}"
@@ -288,6 +277,7 @@ async fn integration_extra_constraints_destructive() {
         &actual_tables,
         Some(&desired.indexes),
         Some(&actual_indexes),
+        None,
         None,
     );
 

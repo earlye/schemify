@@ -1,6 +1,6 @@
 //! Emit SQL and execute migrations (ported from Go internal/apply).
 
-use crate::diff::{KIND_CREATE_INDEX, Migration, MigrationDetail};
+use crate::diff::{KIND_CREATE_INDEX, KIND_DROP_INDEX, Migration, MigrationDetail};
 use crate::error::{Error, Result};
 use crate::schema::{Column, ForeignKey, Index, PrimaryKeyConstraint, Table, UniqueConstraint};
 use tracing::debug;
@@ -26,7 +26,7 @@ pub async fn apply(
     let mut in_tx: Vec<&Migration> = Vec::new();
     let mut out_tx: Vec<&Migration> = Vec::new();
     for m in migrations {
-        if m.kind == KIND_CREATE_INDEX {
+        if m.kind == KIND_CREATE_INDEX || m.kind == KIND_DROP_INDEX {
             out_tx.push(m);
         } else {
             in_tx.push(m);
@@ -81,6 +81,18 @@ pub fn migration_sql(m: &Migration) -> Result<String> {
         MigrationDetail::AddForeignKey { foreign_key } => {
             Ok(add_fk_sql(&m.schema, &m.table, foreign_key))
         }
+        MigrationDetail::DropUnique { constraint_name } => Ok(format!(
+            "ALTER TABLE {}.{} DROP CONSTRAINT IF EXISTS {}",
+            m.schema, m.table, constraint_name
+        )),
+        MigrationDetail::DropFk { constraint_name } => Ok(format!(
+            "ALTER TABLE {}.{} DROP CONSTRAINT IF EXISTS {}",
+            m.schema, m.table, constraint_name
+        )),
+        MigrationDetail::DropIndex { index } => Ok(format!(
+            "DROP INDEX CONCURRENTLY IF EXISTS {}.{}",
+            index.schema, index.name
+        )),
     }
 }
 
@@ -151,12 +163,7 @@ fn create_index_sql(idx: &Index) -> String {
     let col_list = index_column_list_sql(&idx.columns);
     format!(
         "CREATE {}INDEX CONCURRENTLY IF NOT EXISTS {} ON {}.{} ({}){}",
-        qual,
-        idx.name,
-        idx.table_schema,
-        idx.table_name,
-        col_list,
-        using
+        qual, idx.name, idx.table_schema, idx.table_name, col_list, using
     )
 }
 
@@ -239,7 +246,7 @@ fn add_column_sql(schema: &str, table: &str, c: &Column) -> String {
 
 fn drop_column_sql(schema: &str, table: &str, column_name: &str) -> String {
     format!(
-        "ALTER TABLE {}.{} DROP COLUMN {}",
+        "ALTER TABLE {}.{} DROP COLUMN IF EXISTS {}",
         schema, table, column_name
     )
 }

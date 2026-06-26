@@ -1,9 +1,11 @@
 //! Load desired schema from `.sql` files (ported from Go internal/schema/load).
 
+use crate::drift::{build_anticipated_drift, extract_drift_blocks, merge_drift_groups};
 use crate::error::{Error, Result};
 use crate::helpers::{predicted_foreign_key_constraint_name, predicted_unique_constraint_name};
 use crate::schema::{
-    self, AllowDropColumn, ForeignKey, Index, PrimaryKeyConstraint, Table, UniqueConstraint,
+    self, AllowDropColumn, DecoratedLoadResult, DecoratedTable, DriftBlock, ForeignKey, Index,
+    PrimaryKeyConstraint, Table, UniqueConstraint,
 };
 use pg_query::protobuf::node::Node as PgNode;
 use pg_query::protobuf::{
@@ -32,8 +34,10 @@ static DROP_TABLE_COMMENT_RE: LazyLock<Regex> =
 static DROP_TABLE_BLOCK_END_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*--\s*\)\s*;?\s*$").expect("regex"));
 static CREATE_SCHEMA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_$]*))"#)
-        .expect("regex")
+    Regex::new(
+        r#"(?i)CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_$]*))"#,
+    )
+    .expect("regex")
 });
 
 pub fn extract_create_schemas(sql: &str) -> BTreeSet<String> {
@@ -122,6 +126,99 @@ pub fn load_allow_drop_table_defs(dir: impl AsRef<Path>) -> Result<HashMap<Strin
     Ok(out)
 }
 
+pub fn load_decorated_from_dir(dir: impl AsRef<Path>) -> Result<DecoratedLoadResult> {
+    let dir = dir.as_ref();
+    let mut entries: Vec<_> = fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("sql"))
+                .unwrap_or(false)
+        })
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    entries.sort();
+
+    let mut tables: HashMap<String, Table> = HashMap::new();
+    let mut indexes: HashMap<String, Index> = HashMap::new();
+    let mut schemas = BTreeSet::new();
+    let mut decorated_tables: HashMap<String, DecoratedTable> = HashMap::new();
+    let mut all_drift_blocks: Vec<DriftBlock> = Vec::new();
+
+    for name in entries {
+        let body = fs::read_to_string(dir.join(&name))
+            .map_err(|e| Error::LoadSchema(format!("read {name}: {e}")))?;
+        let (tbls_with_sql, idxs, explicit) =
+            parse_ddl_internal(&body).map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
+        schemas.extend(explicit);
+
+        // Collect the raw SQL of each CREATE TABLE statement for deduplication below.
+        let table_stmt_sqls: Vec<String> = tbls_with_sql.iter().map(|(_, s)| s.clone()).collect();
+
+        for (t, stmt_sql) in tbls_with_sql {
+            let key = schema::table_key(&t.schema, &t.name);
+            // Extract table-scope drift blocks from only this statement's raw SQL, not the full
+            // file. This prevents file-level blocks from being misclassified as table-scope.
+            let mut tbl_blocks = extract_drift_blocks(&stmt_sql, &t.schema, &t.name)
+                .map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
+            for b in &mut tbl_blocks {
+                build_anticipated_drift(b)
+                    .map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
+            }
+            all_drift_blocks.extend(tbl_blocks.clone());
+            decorated_tables.insert(
+                key.clone(),
+                DecoratedTable {
+                    table: t.clone(),
+                    drift_blocks: tbl_blocks,
+                },
+            );
+            tables.insert(key, t);
+        }
+        for idx in idxs {
+            indexes.insert(schema::index_key(&idx.schema, &idx.name), idx);
+        }
+
+        // Collect file-level drift blocks (full file, no table context), then deduplicate:
+        // skip blocks whose opening line appears verbatim in any CREATE TABLE raw SQL — those
+        // were already captured as table-scope above.
+        let mut file_blocks = extract_drift_blocks(&body, "", "")
+            .map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
+        for b in &mut file_blocks {
+            build_anticipated_drift(b).map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
+        }
+        for b in file_blocks {
+            let policy_str = match b.policy {
+                crate::schema::DriftPolicy::Drop => "DROP",
+                crate::schema::DriftPolicy::Deprecated => "DEPRECATED",
+            };
+            // Check whether this block's opening line appears in any CREATE TABLE's raw SQL.
+            // If so, it was already captured as table-scope and should not be added again.
+            let open_pattern = format!("DRIFT {} {} (", b.id, policy_str).to_uppercase();
+            let is_table_local = table_stmt_sqls
+                .iter()
+                .any(|s| s.to_uppercase().contains(&open_pattern));
+            if !is_table_local {
+                all_drift_blocks.push(b);
+            }
+        }
+    }
+
+    let drift_groups = merge_drift_groups(all_drift_blocks)?;
+
+    Ok(DecoratedLoadResult {
+        schemas,
+        tables,
+        indexes,
+        decorated_tables,
+        file_level_drift: Vec::new(),
+        drift_groups,
+    })
+}
+
 /// Extract `-- DROP TABLE … (` … `-- );` blocks and parse each as `CREATE TABLE`.
 /// Incomplete blocks (no closing `-- );`) are skipped. Any block that closes but fails
 /// [`parse_ddl`] returns `Err` (fail-fast).
@@ -136,13 +233,10 @@ pub fn extract_drop_table_block_defs(raw_sql: &str) -> Result<HashMap<String, Ta
             continue;
         };
         let start = i;
-        let mut end: Option<usize> = None;
-        for j in (i + 1)..lines.len() {
-            if DROP_TABLE_BLOCK_END_RE.is_match(lines[j]) {
-                end = Some(j);
-                break;
-            }
-        }
+        let end: Option<usize> = lines[i + 1..]
+            .iter()
+            .position(|l| DROP_TABLE_BLOCK_END_RE.is_match(l))
+            .map(|p| p + i + 1);
         let Some(end) = end else {
             i += 1;
             continue;
@@ -188,9 +282,13 @@ pub fn extract_removed_directives(raw_sql: &str) -> Vec<AllowDropColumn> {
     out
 }
 
-pub fn parse_ddl(sql: &str) -> Result<(Vec<Table>, Vec<Index>, BTreeSet<String>)> {
+type ParsedDDLInternal = (Vec<(Table, String)>, Vec<Index>, BTreeSet<String>);
+
+/// Like `parse_ddl` but also returns the raw SQL slice for each parsed CREATE TABLE.
+/// Used by `load_decorated_from_dir` to correctly scope per-table drift block extraction.
+fn parse_ddl_internal(sql: &str) -> Result<ParsedDDLInternal> {
     let parsed = pg_query::parse(sql).map_err(|e| Error::ParseSql(e.to_string()))?;
-    let mut tables = Vec::new();
+    let mut tables: Vec<(Table, String)> = Vec::new();
     let mut indexes = Vec::new();
     let mut explicit_schemas = extract_create_schemas(sql);
 
@@ -210,7 +308,7 @@ pub fn parse_ddl(sql: &str) -> Result<(Vec<Table>, Vec<Index>, BTreeSet<String>)
             PgNode::CreateStmt(cs) => {
                 let mut t = parse_create_stmt(cs)?;
                 t.allow_drop_columns = allow_drops;
-                tables.push(t);
+                tables.push((t, stmt_sql.to_string()));
             }
             PgNode::IndexStmt(ix) => {
                 if !ix.concurrent {
@@ -226,6 +324,15 @@ pub fn parse_ddl(sql: &str) -> Result<(Vec<Table>, Vec<Index>, BTreeSet<String>)
     }
 
     Ok((tables, indexes, explicit_schemas))
+}
+
+pub fn parse_ddl(sql: &str) -> Result<(Vec<Table>, Vec<Index>, BTreeSet<String>)> {
+    let (tables_with_sql, indexes, schemas) = parse_ddl_internal(sql)?;
+    Ok((
+        tables_with_sql.into_iter().map(|(t, _)| t).collect(),
+        indexes,
+        schemas,
+    ))
 }
 
 fn slice_raw_stmt<'a>(full: &'a str, raw: &pg_query::protobuf::RawStmt) -> &'a str {

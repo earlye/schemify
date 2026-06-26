@@ -110,9 +110,7 @@ func LoadAllowDropTableDefs(fsys fs.FS) (map[string]*Table, error) {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
 		defs := extractDropTableBlockDefs(string(body))
-		for k, t := range defs {
-			out[k] = t
-		}
+		maps.Copy(out, defs)
 	}
 	return out, nil
 }
@@ -155,6 +153,10 @@ func extractDropTableBlockDefs(rawSQL string) map[string]*Table {
 		t := tbls[0]
 		key := tableKey(t.Schema, t.Name)
 		out[key] = t
+		slog.Warn(`legacy "-- DROP TABLE" directive found; replace with DRIFT block`,
+			"table", key,
+			"suggested", fmt.Sprintf("-- DRIFT <choose-an-id> DROP (\n-- DROP TABLE %s (\n--   ...\n-- );\n-- )", key),
+		)
 		i = end
 	}
 	return out
@@ -233,12 +235,24 @@ func extractRemovedDirectives(rawSQL string) []AllowDropColumn {
 	return out
 }
 
-func parseDDL(sql string) ([]*Table, []*Index, map[string]struct{}, error) {
+type parsedDDL struct {
+	Tables           []*Table
+	Indexes          []*Index
+	ExplicitSchemas  map[string]struct{}
+	TableDriftBlocks map[string][]DriftBlock
+	TableStmtRawSQLs []string
+}
+
+func parseDDLInternal(sql string) (*parsedDDL, error) {
 	batch, err := postgresparser.ParseSQLAll(sql)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
+	}
+	if batch.HasFailures {
+		return nil, fmt.Errorf("SQL parse failures detected")
 	}
 
+	result := &parsedDDL{TableDriftBlocks: make(map[string][]DriftBlock)}
 	var tables []*Table
 	var indexes []*Index
 	explicitSchemas := extractCreateSchemas(sql)
@@ -309,6 +323,18 @@ func parseDDL(sql string) ([]*Table, []*Index, map[string]struct{}, error) {
 					}
 				}
 				tables = append(tables, t)
+				key := tableKey(t.Schema, t.Name)
+				driftBlocks, _ := extractDriftBlocks(stmt.RawSQL, t.Schema, t.Name)
+				result.TableDriftBlocks[key] = driftBlocks
+				result.TableStmtRawSQLs = append(result.TableStmtRawSQLs, stmt.RawSQL)
+				for _, d := range allowDrops {
+					slog.Warn(`legacy "-- removed:" directive found; replace with DRIFT block`,
+						"table", tableKey(t.Schema, t.Name),
+						"column", d.Name,
+						"type", d.Type,
+						"suggested", fmt.Sprintf("-- DRIFT <choose-an-id> DROP (\n--   %s %s\n-- )", d.Name, d.Type),
+					)
+				}
 			case postgresparser.DDLCreateIndex:
 				// Table is in the same statement's Tables.
 				if len(stmt.Query.Tables) == 0 {
@@ -322,29 +348,17 @@ func parseDDL(sql string) ([]*Table, []*Index, map[string]struct{}, error) {
 				if idxSchema == "" {
 					idxSchema = "public"
 				}
-				concurrent := false
-				for _, f := range action.Flags {
-					if f == "CONCURRENTLY" {
-						concurrent = true
-						break
-					}
-				}
+				concurrent := slices.Contains(action.Flags, "CONCURRENTLY")
 				if !concurrent {
-					return nil, nil, nil, fmt.Errorf("CREATE INDEX %s.%s must use CONCURRENTLY (required for large-table safety)", idxSchema, action.ObjectName)
+					return nil, fmt.Errorf("CREATE INDEX %s.%s must use CONCURRENTLY (required for large-table safety)", idxSchema, action.ObjectName)
 				}
 				idxType := action.IndexType
 				if idxType == "" {
 					idxType = "btree"
 				}
-				unique := false
-				for _, f := range action.Flags {
-					if f == "UNIQUE" {
-						unique = true
-						break
-					}
-				}
+				unique := slices.Contains(action.Flags, "UNIQUE")
 				if action.ObjectName == "" {
-					return nil, nil, fmt.Errorf("CREATE INDEX CONCURRENTLY on table %s.%s requires an explicit name (schemify rewrites it as IF NOT EXISTS <name>)", idxSchema, strings.ToLower(tbl.Name))
+					return nil, fmt.Errorf("CREATE INDEX CONCURRENTLY on table %s.%s requires an explicit name (schemify rewrites it as IF NOT EXISTS <name>)", idxSchema, strings.ToLower(tbl.Name))
 				}
 				indexes = append(indexes, &Index{
 					Name:         strings.ToLower(action.ObjectName),
@@ -359,7 +373,18 @@ func parseDDL(sql string) ([]*Table, []*Index, map[string]struct{}, error) {
 			}
 		}
 	}
-	return tables, indexes, explicitSchemas, nil
+	result.Tables = tables
+	result.Indexes = indexes
+	result.ExplicitSchemas = explicitSchemas
+	return result, nil
+}
+
+func parseDDL(sql string) ([]*Table, []*Index, map[string]struct{}, error) {
+	r, err := parseDDLInternal(sql)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return r.Tables, r.Indexes, r.ExplicitSchemas, nil
 }
 
 // lowerAll returns a new slice with each element lowercased.
@@ -397,4 +422,115 @@ func typeLengthSuffix(t string) string {
 		return ""
 	}
 	return t[i:]
+}
+
+// LoadDecoratedFromFS reads all *.sql files from fsys, parses CREATE TABLE and CREATE INDEX
+// statements, extracts DRIFT blocks, builds anticipated drift, and returns a DecoratedLoadResult.
+//
+// DRIFT blocks are comment annotations of the form:
+//
+//	-- DRIFT {id} DROP (
+//	--   old_column TEXT NOT NULL
+//	-- )
+//
+// Table-scope blocks are extracted from each CREATE TABLE statement body.
+// File-scope blocks are extracted from the file content outside any statement and may
+// contain full DDL statements (e.g. CREATE INDEX CONCURRENTLY …).
+//
+// Cross-file merge rules: blocks with the same {id} and policy across multiple files
+// are merged into one DriftGroup (anticipated columns, constraints, and indexes are
+// unioned). Same {id} with different policies in any combination of files is a load
+// error. IDs are global within the schema set — not scoped per file.
+func LoadDecoratedFromFS(fsys fs.FS) (*DecoratedLoadResult, error) {
+	slog.Debug("Loading decorated schema from FS", "fsys", fsys)
+
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return nil, fmt.Errorf("read schema dir: %w", err)
+	}
+
+	var sqlFiles []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(e.Name()), ".sql") {
+			sqlFiles = append(sqlFiles, e.Name())
+		}
+	}
+	sort.Strings(sqlFiles)
+
+	tables := make(map[string]*Table)
+	indexes := make(map[string]*Index)
+	schemas := make(map[string]struct{})
+	decoratedTables := make(map[string]*DecoratedTable)
+	var fileLevelDrift []DriftBlock
+	var allBlocks []DriftBlock
+
+	for _, path := range sqlFiles {
+		body, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		parsed, err := parseDDLInternal(string(body))
+		if err != nil {
+			continue
+		}
+		for ns := range parsed.ExplicitSchemas {
+			schemas[ns] = struct{}{}
+		}
+		for _, t := range parsed.Tables {
+			key := tableKey(t.Schema, t.Name)
+			tables[key] = t
+			driftBlocks := parsed.TableDriftBlocks[key]
+			// Build anticipated drift for each block
+			for i := range driftBlocks {
+				_ = buildAnticipatedDrift(&driftBlocks[i])
+			}
+			decoratedTables[key] = &DecoratedTable{
+				Table:       *t,
+				DriftBlocks: driftBlocks,
+			}
+			allBlocks = append(allBlocks, driftBlocks...)
+		}
+		for _, idx := range parsed.Indexes {
+			key := indexKey(idx.Schema, idx.Name)
+			indexes[key] = idx
+		}
+		// Scan entire file body for file-level drift blocks
+		fileBlocks, _ := extractDriftBlocks(string(body), "", "")
+		for _, fb := range fileBlocks {
+			// Check if this block is already captured as table-local
+			needle := strings.ToUpper("DRIFT " + fb.ID + " " + string(fb.Policy) + " (")
+			isTableLocal := false
+			for _, rawSQL := range parsed.TableStmtRawSQLs {
+				if strings.Contains(strings.ToUpper(rawSQL), needle) {
+					isTableLocal = true
+					break
+				}
+			}
+			if !isTableLocal {
+				fb2 := fb
+				_ = buildAnticipatedDrift(&fb2)
+				fileLevelDrift = append(fileLevelDrift, fb2)
+				allBlocks = append(allBlocks, fb2)
+			}
+		}
+	}
+
+	driftGroups, err := MergeDriftGroups(allBlocks)
+	if err != nil {
+		return nil, fmt.Errorf("merge drift groups: %w", err)
+	}
+
+	return &DecoratedLoadResult{
+		LoadResult: LoadResult{
+			Schemas: schemas,
+			Tables:  tables,
+			Indexes: indexes,
+		},
+		DecoratedTables: decoratedTables,
+		FileLevelDrift:  fileLevelDrift,
+		DriftGroups:     driftGroups,
+	}, nil
 }

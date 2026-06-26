@@ -120,3 +120,15 @@ apply-constraints-00: up build
 .PHONY: apply-constraints-01
 apply-constraints-01: up build
 	timeout 30 ./bin/schemify -s ./schemas/demo-constraints-01 -v=TRACE
+
+.PHONY: apply-drift-v01
+apply-drift-v01: up build
+	./bin/schemify -s ./schemas/demo-drift-v01 -v
+
+.PHONY: apply-drift-v02-drop
+apply-drift-v02-drop: up build
+	./bin/schemify -s ./schemas/demo-drift-v02-drop -v
+
+.PHONY: apply-drift-v03-deprecated
+apply-drift-v03-deprecated: up build
+	./bin/schemify -s ./schemas/demo-drift-v03-deprecated -v

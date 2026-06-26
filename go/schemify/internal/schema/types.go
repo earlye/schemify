@@ -61,3 +61,54 @@ type Index struct {
 	IndexType   string // btree, gin, gist, hash; default "btree"
 	Concurrently bool  // must be true; CREATE INDEX CONCURRENTLY
 }
+
+type DriftPolicy string
+
+const (
+	DriftPolicyDrop       DriftPolicy = "DROP"
+	DriftPolicyDeprecated DriftPolicy = "DEPRECATED"
+)
+
+type DriftScope int
+
+const (
+	DriftScopeTable DriftScope = iota
+	DriftScopeFile
+)
+
+// DriftBlock is a parsed "-- DRIFT {id} POLICY (" ... "-- )" comment block.
+type DriftBlock struct {
+	ID          string
+	Policy      DriftPolicy
+	RawBody     string
+	Scope       DriftScope
+	TableSchema string
+	TableName   string
+	// Populated by buildAnticipatedDrift:
+	AnticipatedTable   *Table
+	AnticipatedIndexes []*Index
+}
+
+// DecoratedTable extends Table with drift blocks from its statement body.
+type DecoratedTable struct {
+	Table
+	DriftBlocks []DriftBlock
+}
+
+// DriftGroup is the merged view of all DriftBlocks with the same ID.
+type DriftGroup struct {
+	ID                     string
+	Policy                 DriftPolicy
+	AnticipatedColumns     []Column
+	AnticipatedUniqueKeys  []UniqueConstraint
+	AnticipatedForeignKeys []ForeignKey
+	AnticipatedIndexes     []*Index
+}
+
+// DecoratedLoadResult extends LoadResult with drift block information.
+type DecoratedLoadResult struct {
+	LoadResult
+	DecoratedTables map[string]*DecoratedTable
+	FileLevelDrift  []DriftBlock
+	DriftGroups     map[string]*DriftGroup
+}
