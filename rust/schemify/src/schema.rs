@@ -101,6 +101,8 @@ pub fn normalize_info_schema_type(t: &str) -> String {
         "integer" => "integer".into(),
         "bigint" => "bigint".into(),
         "smallint" => "smallint".into(),
+        "timestamp with time zone" => "timestamptz".into(),
+        "timestamp without time zone" => "timestamp".into(),
         _ => {
             if t.starts_with("character varying") {
                 format!("character varying{}", type_length_suffix(&t))

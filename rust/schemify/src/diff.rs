@@ -572,15 +572,23 @@ pub fn diff_tables_and_indexes(
                         }
                     }
                 }
-                disallowed.push(DestructiveChange {
-                    kind: "drop_index".into(),
-                    schema: have_idx.schema.clone(),
-                    table: String::new(),
-                    column: String::new(),
-                    index: have_idx.name.clone(),
-                    name: String::new(),
-                    detail: String::new(),
+                // Indexes on tables being dropped vanish with the table; don't double-report.
+                let table_being_dropped = migrations.iter().any(|m| {
+                    m.kind == KIND_DROP_TABLE
+                        && m.schema == have_idx.table_schema
+                        && m.table == have_idx.table_name
                 });
+                if !table_being_dropped {
+                    disallowed.push(DestructiveChange {
+                        kind: "drop_index".into(),
+                        schema: have_idx.schema.clone(),
+                        table: String::new(),
+                        column: String::new(),
+                        index: have_idx.name.clone(),
+                        name: String::new(),
+                        detail: String::new(),
+                    });
+                }
             }
         }
     }
