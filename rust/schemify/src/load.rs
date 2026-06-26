@@ -185,12 +185,9 @@ pub fn load_decorated_from_dir(dir: impl AsRef<Path>) -> Result<DecoratedLoadRes
         // Collect file-level drift blocks (full file, no table context), then deduplicate:
         // skip blocks whose opening line appears verbatim in any CREATE TABLE raw SQL — those
         // were already captured as table-scope above.
-        let mut file_blocks = extract_drift_blocks(&body, "", "")
+        let file_blocks = extract_drift_blocks(&body, "", "")
             .map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
-        for b in &mut file_blocks {
-            build_anticipated_drift(b).map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
-        }
-        for b in file_blocks {
+        for mut b in file_blocks {
             let policy_str = match b.policy {
                 crate::schema::DriftPolicy::Drop => "DROP",
                 crate::schema::DriftPolicy::Deprecated => "DEPRECATED",
@@ -202,6 +199,7 @@ pub fn load_decorated_from_dir(dir: impl AsRef<Path>) -> Result<DecoratedLoadRes
                 .iter()
                 .any(|s| s.to_uppercase().contains(&open_pattern));
             if !is_table_local {
+                build_anticipated_drift(&mut b).map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
                 all_drift_blocks.push(b);
             }
         }
