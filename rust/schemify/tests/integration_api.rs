@@ -90,7 +90,7 @@ fn env_or(key: &str, def: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| def.into())
 }
 
-async fn itest_client() -> Option<tokio_postgres::Client> {
+async fn itest_client() -> Option<schemify::DbConnection> {
     let cfg = DatabaseConfig {
         host: env_or("DB_HOST", "localhost"),
         port: env_or("DB_PORT", "5432"),

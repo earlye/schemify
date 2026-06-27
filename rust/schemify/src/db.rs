@@ -9,6 +9,30 @@ use crate::schema::{
 use std::collections::HashMap;
 use tokio_postgres::{Client, NoTls};
 
+pub struct DbConnection {
+    pub client: Client,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl std::ops::Deref for DbConnection {
+    type Target = Client;
+    fn deref(&self) -> &Client {
+        &self.client
+    }
+}
+
+impl std::ops::DerefMut for DbConnection {
+    fn deref_mut(&mut self) -> &mut Client {
+        &mut self.client
+    }
+}
+
+impl Drop for DbConnection {
+    fn drop(&mut self) {
+        self._task.abort();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
     pub host: String,
@@ -100,13 +124,13 @@ fn urlencoding_encode(s: &str) -> String {
     out
 }
 
-pub async fn connect(cfg: &DatabaseConfig) -> Result<Client> {
+pub async fn connect(cfg: &DatabaseConfig) -> Result<DbConnection> {
     let dsn = cfg.dsn()?;
     let (client, connection) = tokio_postgres::connect(&dsn, NoTls)
         .await
         .map_err(|e| Error::Connect(format!("connect: {e}")))?;
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let _ = connection.await;
     });
 
@@ -115,7 +139,7 @@ pub async fn connect(cfg: &DatabaseConfig) -> Result<Client> {
         .await
         .map_err(|e| Error::Connect(format!("ping: {e}")))?;
 
-    Ok(client)
+    Ok(DbConnection { client, _task: handle })
 }
 
 #[derive(Debug, Default)]

@@ -14,7 +14,8 @@ pub mod schema;
 
 pub use apply::{ApplyOptions, apply, migration_sql};
 pub use db::{
-    DatabaseConfig, IntrospectResult, connect, introspect, introspect_all, list_user_schemas,
+    DatabaseConfig, DbConnection, IntrospectResult, connect, introspect, introspect_all,
+    list_user_schemas,
 };
 pub use diff::{DestructiveChange, Migration, MigrationDetail, diff_tables_and_indexes};
 pub use drift::merge_drift_groups;
