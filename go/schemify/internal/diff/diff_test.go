@@ -41,7 +41,7 @@ func TestDiff_AddColumn(t *testing.T) {
 		"public.a": {
 			Schema:  "public",
 			Name:    "a",
-			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "name", Type: "character varying(255)"}},
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "name", Type: "character varying(255)", Nullable: true}},
 		},
 	}
 	actual := map[string]*schema.Table{
@@ -62,6 +62,63 @@ func TestDiff_AddColumn(t *testing.T) {
 	d, ok := add[0].Detail.(*AddColumnDetail)
 	if add[0].Kind != KindAddColumn || !ok || d.Column.Name != "name" {
 		t.Errorf("add[0]: %+v", add[0])
+	}
+}
+
+func TestDiff_AddColumn_NotNullDefault_Additive(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "status", Type: "text", Nullable: false, Default: "'init'"}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}},
+		},
+	}
+
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive, got %v", dest)
+	}
+	if len(add) != 1 {
+		t.Fatalf("expected 1 additive, got %d", len(add))
+	}
+	d, ok := add[0].Detail.(*AddColumnDetail)
+	if add[0].Kind != KindAddColumn || !ok || d.Column.Name != "status" {
+		t.Errorf("add[0]: %+v", add[0])
+	}
+}
+
+func TestDiff_AddColumn_NotNullNoDefault_Disallowed(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}, {Name: "status", Type: "text", Nullable: false}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "id", Type: "integer"}},
+		},
+	}
+
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(add) != 0 {
+		t.Errorf("expected no additive, got %v", add)
+	}
+	if len(dest) != 1 {
+		t.Fatalf("expected 1 destructive, got %d", len(dest))
+	}
+	if dest[0].Kind != "add_column_not_null_no_default" || dest[0].Column != "status" {
+		t.Errorf("dest[0]: %+v", dest[0])
 	}
 }
 

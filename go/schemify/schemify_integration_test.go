@@ -484,6 +484,152 @@ func TestIntegration_DriftDeprecated(t *testing.T) {
 	}
 }
 
+// itestNotNullDefaultBaselineSQL creates a table with no constrained columns beyond the PK.
+const itestNotNullDefaultBaselineSQL = `
+CREATE TABLE public.schemify_itest_nnd_things (
+    id text NOT NULL,
+    PRIMARY KEY (id)
+);
+`
+
+// itestNotNullDefaultAddedSQL adds a NOT NULL column with a DEFAULT.
+const itestNotNullDefaultAddedSQL = `
+CREATE TABLE public.schemify_itest_nnd_things (
+    id text NOT NULL,
+    status text NOT NULL DEFAULT 'init',
+    PRIMARY KEY (id)
+);
+`
+
+// itestNotNullNoDefaultAddedSQL adds a NOT NULL column with no DEFAULT, which cannot
+// be applied safely to a table that may already have rows.
+const itestNotNullNoDefaultAddedSQL = `
+CREATE TABLE public.schemify_itest_nnd_things (
+    id text NOT NULL,
+    status text NOT NULL,
+    PRIMARY KEY (id)
+);
+`
+
+func itestCleanupNotNullDefault(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS public.schemify_itest_nnd_things CASCADE"); err != nil {
+		t.Logf("cleanup nnd: %v", err)
+	}
+}
+
+// TestIntegration_AddColumn_NotNullDefault verifies that adding a NOT NULL column with
+// a DEFAULT to a table with existing rows applies both constraints at the database
+// level and backfills existing rows to the default.
+func TestIntegration_AddColumn_NotNullDefault(t *testing.T) {
+	ctx := context.Background()
+	pool := itestPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+	itestCleanupNotNullDefault(t, ctx, pool)
+	t.Cleanup(func() { itestCleanupNotNullDefault(t, ctx, pool) })
+
+	baselineFS := fstest.MapFS{"schema.sql": &fstest.MapFile{Data: []byte(itestNotNullDefaultBaselineSQL)}}
+	addedFS := fstest.MapFS{"schema.sql": &fstest.MapFile{Data: []byte(itestNotNullDefaultAddedSQL)}}
+
+	itestApply(t, ctx, pool, baselineFS, "baseline")
+
+	if _, err := pool.Exec(ctx, "INSERT INTO public.schemify_itest_nnd_things (id) VALUES ('row1'), ('row2')"); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+
+	run2 := itestApply(t, ctx, pool, addedFS, "add column")
+	var sawAddColumn bool
+	for _, m := range run2 {
+		if m.Kind == "add_column" && m.Table == "schemify_itest_nnd_things" {
+			sawAddColumn = true
+		}
+	}
+	if !sawAddColumn {
+		t.Fatalf("expected add_column migration, got %v", run2)
+	}
+
+	var isNullable, columnDefault string
+	if err := pool.QueryRow(ctx,
+		"SELECT is_nullable, column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='schemify_itest_nnd_things' AND column_name='status'",
+	).Scan(&isNullable, &columnDefault); err != nil {
+		t.Fatalf("query information_schema: %v", err)
+	}
+	if isNullable != "NO" {
+		t.Errorf("expected is_nullable=NO, got %s", isNullable)
+	}
+	if !strings.Contains(columnDefault, "init") {
+		t.Errorf("expected column_default to reference 'init', got %s", columnDefault)
+	}
+
+	rows, err := pool.Query(ctx, "SELECT status FROM public.schemify_itest_nnd_things ORDER BY id")
+	if err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	defer rows.Close()
+	var statuses []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		statuses = append(statuses, s)
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(statuses))
+	}
+	for _, s := range statuses {
+		if s != "init" {
+			t.Errorf("expected existing row backfilled to 'init', got %q", s)
+		}
+	}
+
+	// Idempotency: applying again must produce no migrations.
+	run3 := itestApply(t, ctx, pool, addedFS, "idempotent")
+	if len(run3) != 0 {
+		t.Errorf("idempotent run: expected no migrations, got %v", run3)
+	}
+}
+
+// TestIntegration_AddColumn_NotNullNoDefault_Disallowed verifies that adding a NOT
+// NULL column with no DEFAULT to an existing table is rejected at plan time instead
+// of producing SQL that PostgreSQL would refuse to run on a populated table.
+func TestIntegration_AddColumn_NotNullNoDefault_Disallowed(t *testing.T) {
+	ctx := context.Background()
+	pool := itestPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+	itestCleanupNotNullDefault(t, ctx, pool)
+	t.Cleanup(func() { itestCleanupNotNullDefault(t, ctx, pool) })
+
+	baselineFS := fstest.MapFS{"schema.sql": &fstest.MapFile{Data: []byte(itestNotNullDefaultBaselineSQL)}}
+	noDefaultFS := fstest.MapFS{"schema.sql": &fstest.MapFile{Data: []byte(itestNotNullNoDefaultAddedSQL)}}
+
+	itestApply(t, ctx, pool, baselineFS, "baseline")
+
+	desired, err := schemify.LoadSchema(noDefaultFS)
+	if err != nil {
+		t.Fatalf("LoadSchema: %v", err)
+	}
+	actual, err := schemify.Introspect(ctx, pool, "public")
+	if err != nil {
+		t.Fatalf("Introspect: %v", err)
+	}
+	actualTables := itestFilterTables(actual.Tables, itestPrefix)
+	actualIndexes := itestFilterIndexes(actual.Indexes, itestPrefix)
+	desiredNs := schema.CollectDesiredNamespaces(desired)
+	actualNs := itestFilterNamespaces(t, ctx, pool, "public")
+
+	_, disallowed := schemify.Diff(desiredNs, actualNs, desired.Tables, actualTables, desired.Indexes, actualIndexes, nil)
+	var saw bool
+	for _, d := range disallowed {
+		if d.Kind == "add_column_not_null_no_default" && d.Column == "status" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("expected add_column_not_null_no_default disallowed change, got %v", disallowed)
+	}
+}
+
 // itestPool connects to PostgreSQL using the same env vars as the CLI
 // (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE).
 // The test is skipped rather than failed if the database is unreachable.
