@@ -1,3 +1,5 @@
 .claude/settings.local.json
 go/.coverage*
 .uncover
+
+.claude
