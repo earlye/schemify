@@ -1,8 +1,8 @@
 //! Port of Go `internal/diff/diff_test.go`.
 
 use schemify::diff::{
-    DestructiveChange, KIND_ADD_COLUMN, KIND_CREATE_SCHEMA, KIND_CREATE_TABLE, KIND_DROP_TABLE,
-    MigrationDetail, diff_tables_and_indexes, tables_match_for_drop,
+    diff_tables_and_indexes, tables_match_for_drop, DestructiveChange, MigrationDetail,
+    KIND_ADD_COLUMN, KIND_CREATE_SCHEMA, KIND_CREATE_TABLE, KIND_DROP_TABLE,
 };
 use schemify::schema::{Column, Index, Table, UniqueConstraint};
 use std::collections::{HashMap, HashSet};
@@ -85,6 +85,83 @@ fn diff_add_column() {
         panic!("expected AddColumn");
     };
     assert_eq!(column.name, "name");
+}
+
+#[test]
+fn diff_add_column_not_null_default_additive() {
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![
+                col("id", "integer"),
+                Column {
+                    name: "status".into(),
+                    type_: "text".into(),
+                    nullable: false,
+                    default: "'init'".into(),
+                },
+            ],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![col("id", "integer")],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(dest.is_empty());
+    assert_eq!(add.len(), 1);
+    assert_eq!(add[0].kind, KIND_ADD_COLUMN);
+    let MigrationDetail::AddColumn { column } = &add[0].detail else {
+        panic!("expected AddColumn");
+    };
+    assert_eq!(column.name, "status");
+}
+
+#[test]
+fn diff_add_column_not_null_no_default_disallowed() {
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![
+                col("id", "integer"),
+                Column {
+                    name: "status".into(),
+                    type_: "text".into(),
+                    nullable: false,
+                    default: String::new(),
+                },
+            ],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![col("id", "integer")],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(add.is_empty());
+    assert_eq!(dest.len(), 1);
+    assert_eq!(dest[0].kind, "add_column_not_null_no_default");
+    assert_eq!(dest[0].column, "status");
 }
 
 #[test]

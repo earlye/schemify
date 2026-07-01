@@ -86,6 +86,42 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS schemify_itest_idx_ns_table_id
     ON schemify_itest_ns.schemify_itest_ns_table (id);
 "#;
 
+/// Baseline table with no constrained columns beyond the PK.
+const ITEST_NND_BASELINE_SQL: &str = r#"
+CREATE TABLE public.schemify_itest_nnd_things (
+    id text NOT NULL,
+    PRIMARY KEY (id)
+);
+"#;
+
+/// Adds a NOT NULL column with a DEFAULT.
+const ITEST_NND_ADDED_SQL: &str = r#"
+CREATE TABLE public.schemify_itest_nnd_things (
+    id text NOT NULL,
+    status text NOT NULL DEFAULT 'init',
+    PRIMARY KEY (id)
+);
+"#;
+
+/// Adds a NOT NULL column with no DEFAULT, which cannot be applied safely to a
+/// table that may already have rows.
+const ITEST_NND_NO_DEFAULT_SQL: &str = r#"
+CREATE TABLE public.schemify_itest_nnd_things (
+    id text NOT NULL,
+    status text NOT NULL,
+    PRIMARY KEY (id)
+);
+"#;
+
+async fn itest_cleanup_nnd(client: &tokio_postgres::Client) {
+    let _ = client
+        .execute(
+            "DROP TABLE IF EXISTS public.schemify_itest_nnd_things CASCADE",
+            &[],
+        )
+        .await;
+}
+
 fn env_or(key: &str, def: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| def.into())
 }
@@ -295,4 +331,117 @@ async fn integration_extra_constraints_destructive() {
     assert!(saw_u && saw_fk, "disallowed={disallowed:?}");
 
     itest_cleanup(&client).await;
+}
+
+#[tokio::test]
+async fn integration_add_column_not_null_default() {
+    let Some(mut client) = itest_client().await else {
+        eprintln!("skip integration_add_column_not_null_default: postgres not reachable");
+        return;
+    };
+
+    itest_cleanup_nnd(&client).await;
+
+    let baseline_dir = tempdir().unwrap();
+    fs::write(baseline_dir.path().join("schema.sql"), ITEST_NND_BASELINE_SQL).unwrap();
+    let added_dir = tempdir().unwrap();
+    fs::write(added_dir.path().join("schema.sql"), ITEST_NND_ADDED_SQL).unwrap();
+
+    itest_apply(&mut client, baseline_dir.path(), "baseline", "public").await;
+
+    client
+        .execute(
+            "INSERT INTO public.schemify_itest_nnd_things (id) VALUES ('row1'), ('row2')",
+            &[],
+        )
+        .await
+        .expect("seed rows");
+
+    let run2 = itest_apply(&mut client, added_dir.path(), "add column", "public").await;
+    assert!(
+        run2.iter()
+            .any(|m| m.kind == "add_column" && m.table == "schemify_itest_nnd_things"),
+        "expected add_column migration, got {run2:?}"
+    );
+
+    let row = client
+        .query_one(
+            "SELECT is_nullable, column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='schemify_itest_nnd_things' AND column_name='status'",
+            &[],
+        )
+        .await
+        .expect("query information_schema");
+    let is_nullable: String = row.get(0);
+    let column_default: String = row.get(1);
+    assert_eq!(is_nullable, "NO");
+    assert!(
+        column_default.contains("init"),
+        "expected column_default to reference 'init', got {column_default}"
+    );
+
+    let rows = client
+        .query(
+            "SELECT status FROM public.schemify_itest_nnd_things ORDER BY id",
+            &[],
+        )
+        .await
+        .expect("query rows");
+    assert_eq!(rows.len(), 2);
+    for row in &rows {
+        let status: String = row.get(0);
+        assert_eq!(status, "init");
+    }
+
+    let run3 = itest_apply(&mut client, added_dir.path(), "idempotent", "public").await;
+    assert!(run3.is_empty(), "idempotent run: expected no migrations, got {run3:?}");
+
+    itest_cleanup_nnd(&client).await;
+}
+
+#[tokio::test]
+async fn integration_add_column_not_null_no_default_disallowed() {
+    let Some(mut client) = itest_client().await else {
+        eprintln!("skip integration_add_column_not_null_no_default_disallowed: postgres not reachable");
+        return;
+    };
+
+    itest_cleanup_nnd(&client).await;
+
+    let baseline_dir = tempdir().unwrap();
+    fs::write(baseline_dir.path().join("schema.sql"), ITEST_NND_BASELINE_SQL).unwrap();
+    let no_default_dir = tempdir().unwrap();
+    fs::write(
+        no_default_dir.path().join("schema.sql"),
+        ITEST_NND_NO_DEFAULT_SQL,
+    )
+    .unwrap();
+
+    itest_apply(&mut client, baseline_dir.path(), "baseline", "public").await;
+
+    let desired = load_from_dir(no_default_dir.path()).unwrap();
+    let actual = introspect(&client, "public").await.unwrap();
+    let actual_tables = filter_tables(&actual.tables, ITEST_PREFIX);
+    let actual_indexes = filter_indexes(&actual.indexes, ITEST_PREFIX);
+    let desired_ns = collect_desired_namespaces(&desired);
+    let actual_ns = filter_namespaces(&client, "public").await;
+
+    let (_, disallowed) = diff_tables_and_indexes(
+        &desired_ns,
+        &actual_ns,
+        &desired.tables,
+        &actual_tables,
+        Some(&desired.indexes),
+        Some(&actual_indexes),
+        None,
+        None,
+    );
+
+    assert!(
+        disallowed
+            .iter()
+            .any(|d| d.kind == "add_column_not_null_no_default" && d.column == "status"),
+        "expected add_column_not_null_no_default disallowed change, got {disallowed:?}"
+    );
+
+    itest_cleanup_nnd(&client).await;
 }

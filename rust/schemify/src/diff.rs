@@ -80,6 +80,10 @@ impl DestructiveChange {
                 self.schema, self.table, self.name
             ),
             "drop_schema" => format!("schema {} would be dropped", self.schema),
+            "add_column_not_null_no_default" => format!(
+                "column {}.{}.{} is NOT NULL with no DEFAULT and cannot be added to an existing table; add a DEFAULT or split this into add-nullable, backfill, and SET NOT NULL steps",
+                self.schema, self.table, self.column
+            ),
             "primary_key_mismatch" => {
                 let mut s = format!(
                     "table {}.{} primary key would change",
@@ -395,6 +399,18 @@ pub fn diff_tables_and_indexes(
         }
         for c in &want.columns {
             if !have_cols.contains(c.name.as_str()) {
+                if !c.nullable && c.default.is_empty() {
+                    disallowed.push(DestructiveChange {
+                        kind: "add_column_not_null_no_default".into(),
+                        schema: want.schema.clone(),
+                        table: want.name.clone(),
+                        column: c.name.clone(),
+                        index: String::new(),
+                        name: String::new(),
+                        detail: String::new(),
+                    });
+                    continue;
+                }
                 migrations.push(Migration {
                     kind: KIND_ADD_COLUMN,
                     schema: want.schema.clone(),
@@ -699,7 +715,11 @@ fn have_fk(fk: &ForeignKey, list: &[ForeignKey]) -> bool {
 
 fn fk_action_equal(a: &str, b: &str) -> bool {
     fn norm(s: &str) -> &str {
-        if s.is_empty() { "NO ACTION" } else { s }
+        if s.is_empty() {
+            "NO ACTION"
+        } else {
+            s
+        }
     }
     norm(a) == norm(b)
 }

@@ -215,5 +215,12 @@ func dropTableSQL(schema, table string) string {
 }
 
 func columnDef(c *schema.Column) string {
-	return c.Name + " " + c.Type
+	s := c.Name + " " + c.Type
+	if !c.Nullable {
+		s += " NOT NULL"
+	}
+	if c.Default != "" {
+		s += " DEFAULT " + c.Default
+	}
+	return s
 }

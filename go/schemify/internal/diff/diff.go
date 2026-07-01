@@ -172,6 +172,8 @@ func (d DestructiveChange) String() string {
 		return s
 	case "drop_schema":
 		return fmt.Sprintf("schema %s would be dropped", d.Schema)
+	case "add_column_not_null_no_default":
+		return fmt.Sprintf("column %s.%s.%s is NOT NULL with no DEFAULT and cannot be added to an existing table; add a DEFAULT or split this into add-nullable, backfill, and SET NOT NULL steps", d.Schema, d.Table, d.Column)
 	default:
 		return fmt.Sprintf("%s %s.%s would be dropped", d.Kind, d.Schema, d.Table)
 	}
@@ -368,6 +370,15 @@ func Diff(
 		for i := range want.Columns {
 			c := &want.Columns[i]
 			if !haveCols[c.Name] {
+				if !c.Nullable && c.Default == "" {
+					disallowed = append(disallowed, DestructiveChange{
+						Kind:   "add_column_not_null_no_default",
+						Schema: want.Schema,
+						Table:  want.Name,
+						Column: c.Name,
+					})
+					continue
+				}
 				migrations = append(migrations, Migration{
 					Kind:   KindAddColumn,
 					Schema: want.Schema,

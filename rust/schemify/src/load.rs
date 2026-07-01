@@ -199,7 +199,8 @@ pub fn load_decorated_from_dir(dir: impl AsRef<Path>) -> Result<DecoratedLoadRes
                 .iter()
                 .any(|s| s.to_uppercase().contains(&open_pattern));
             if !is_table_local {
-                build_anticipated_drift(&mut b).map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
+                build_anticipated_drift(&mut b)
+                    .map_err(|e| Error::LoadSchema(format!("{name}: {e}")))?;
                 all_drift_blocks.push(b);
             }
         }
@@ -559,27 +560,50 @@ fn parse_create_stmt(stmt: &CreateStmt) -> Result<Table> {
     })
 }
 
+// Same two-step strategy as index_elem_sql: libpg_query's deparser only accepts
+// statement-level nodes, so a bare expression (e.g. a DEFAULT literal) fails that path
+// cleanly; fall back to the manual reconstruction used for index expressions.
+fn deparse_expr(expr: &Node) -> Result<String> {
+    if let Some(ne) = &expr.node {
+        if let Ok(s) = ne.deparse() {
+            return Ok(s);
+        }
+    }
+    deparse_expr_for_index(expr)
+}
+
 fn parse_column_def(cd: &ColumnDef) -> Result<schema::Column> {
     let type_str = cd
         .type_name
         .as_ref()
         .map(format_type_name)
         .unwrap_or_default();
-    let default = cd
-        .raw_default
-        .as_ref()
-        .and_then(|b| b.node.as_ref())
-        .map(|ne| {
-            ne.deparse()
-                .map_err(|e| Error::ParseSql(format!("deparse default: {e}")))
-        })
-        .transpose()?
-        .unwrap_or_default();
+
+    // NOT NULL and DEFAULT on a CREATE TABLE column are raw-parsed into
+    // cd.constraints (Constraint nodes); ColumnDef.is_not_null/raw_default are
+    // populated only after parse analysis, which libpg_query's raw parser
+    // (used here) does not perform.
+    let mut nullable = true;
+    let mut default = String::new();
+    for cnode in &cd.constraints {
+        let Some(PgNode::Constraint(c)) = cnode.node.as_ref() else {
+            continue;
+        };
+        match ConstrType::try_from(c.contype).unwrap_or(ConstrType::Undefined) {
+            ConstrType::ConstrNotnull | ConstrType::ConstrPrimary => nullable = false,
+            ConstrType::ConstrDefault => {
+                if let Some(expr) = c.raw_expr.as_ref() {
+                    default = deparse_expr(expr)?;
+                }
+            }
+            _ => {}
+        }
+    }
 
     Ok(schema::Column {
         name: cd.colname.to_lowercase(),
         type_: schema::normalize_type(&type_str),
-        nullable: !cd.is_not_null,
+        nullable,
         default,
     })
 }

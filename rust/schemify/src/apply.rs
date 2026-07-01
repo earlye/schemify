@@ -256,5 +256,13 @@ fn drop_table_sql(schema: &str, table: &str) -> String {
 }
 
 fn column_def(c: &Column) -> String {
-    format!("{} {}", c.name, c.type_)
+    let mut s = format!("{} {}", c.name, c.type_);
+    if !c.nullable {
+        s.push_str(" NOT NULL");
+    }
+    if !c.default.is_empty() {
+        s.push_str(" DEFAULT ");
+        s.push_str(&c.default);
+    }
+    s
 }
