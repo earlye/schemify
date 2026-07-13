@@ -27,9 +27,8 @@ pub enum MigrationDetail {
     CreateTable { table_def: Table },
     AddColumn { column: schema::Column },
     AlterColumn {
-        column_name: String,
         old_column: schema::Column,
-        new_column: schema::Column,
+        new_column: schema::Column, // new_column.name is the column name
     },
     DropColumn { column_name: String },
     DropTable,
@@ -90,8 +89,8 @@ impl DestructiveChange {
                 "column {}.{}.{} is NOT NULL with no DEFAULT and cannot be added to an existing table; add a DEFAULT or split this into add-nullable, backfill, and SET NOT NULL steps",
                 self.schema, self.table, self.column
             ),
-            "alter_column_not_null_no_default" => format!(
-                "column {}.{}.{} would be narrowed to NOT NULL with no DEFAULT; existing NULL rows would fail the constraint. Add a DEFAULT or backfill existing rows before requiring NOT NULL",
+            "alter_column_not_null_no_backfill" => format!(
+                "column {}.{}.{} would be narrowed to NOT NULL; schemify does not backfill existing rows, so existing NULLs would fail the constraint. Backfill existing rows and apply the NOT NULL change out-of-band, then re-run schemify",
                 self.schema, self.table, self.column
             ),
             "primary_key_mismatch" => {
@@ -446,9 +445,12 @@ pub fn diff_tables_and_indexes(
             {
                 continue;
             }
-            if have_col.nullable && !want_col.nullable && want_col.default.is_empty() {
+            if have_col.nullable && !want_col.nullable {
+                // Unlike ADD COLUMN, ALTER COLUMN ... SET NOT NULL does not backfill
+                // existing rows from a DEFAULT; it only validates and fails on existing
+                // NULLs. So a DEFAULT does not make narrowing an existing column safe.
                 disallowed.push(DestructiveChange {
-                    kind: "alter_column_not_null_no_default".into(),
+                    kind: "alter_column_not_null_no_backfill".into(),
                     schema: want.schema.clone(),
                     table: want.name.clone(),
                     column: want_col.name.clone(),
@@ -463,7 +465,6 @@ pub fn diff_tables_and_indexes(
                 schema: want.schema.clone(),
                 table: want.name.clone(),
                 detail: MigrationDetail::AlterColumn {
-                    column_name: want_col.name.clone(),
                     old_column: (*have_col).clone(),
                     new_column: want_col.clone(),
                 },

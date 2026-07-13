@@ -70,7 +70,6 @@ pub fn migration_sql(m: &Migration) -> Result<String> {
         MigrationDetail::AlterColumn {
             old_column,
             new_column,
-            ..
         } => Ok(alter_column_sql(&m.schema, &m.table, old_column, new_column)),
         MigrationDetail::DropColumn { column_name } => {
             Ok(drop_column_sql(&m.schema, &m.table, column_name))

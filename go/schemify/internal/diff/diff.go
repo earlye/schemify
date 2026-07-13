@@ -108,9 +108,8 @@ type CreateSchemaDetail struct{}
 type CreateTableDetail struct{ TableDef *schema.Table }
 type AddColumnDetail struct{ Column *schema.Column }
 type AlterColumnDetail struct {
-	ColumnName string
-	OldColumn  *schema.Column // current DB state
-	NewColumn  *schema.Column // desired state
+	OldColumn *schema.Column // current DB state
+	NewColumn *schema.Column // desired state; NewColumn.Name is the column name
 }
 type DropColumnDetail struct{ ColumnName string }
 type DropTableDetail struct{}
@@ -181,8 +180,8 @@ func (d DestructiveChange) String() string {
 		return fmt.Sprintf("schema %s would be dropped", d.Schema)
 	case "add_column_not_null_no_default":
 		return fmt.Sprintf("column %s.%s.%s is NOT NULL with no DEFAULT and cannot be added to an existing table; add a DEFAULT or split this into add-nullable, backfill, and SET NOT NULL steps", d.Schema, d.Table, d.Column)
-	case "alter_column_not_null_no_default":
-		return fmt.Sprintf("column %s.%s.%s would be narrowed to NOT NULL with no DEFAULT; existing NULL rows would fail the constraint. Add a DEFAULT or backfill existing rows before requiring NOT NULL", d.Schema, d.Table, d.Column)
+	case "alter_column_not_null_no_backfill":
+		return fmt.Sprintf("column %s.%s.%s would be narrowed to NOT NULL; schemify does not backfill existing rows, so existing NULLs would fail the constraint. Backfill existing rows and apply the NOT NULL change out-of-band, then re-run schemify", d.Schema, d.Table, d.Column)
 	default:
 		return fmt.Sprintf("%s %s.%s would be dropped", d.Kind, d.Schema, d.Table)
 	}
@@ -411,9 +410,12 @@ func Diff(
 			if haveCol.Nullable == wantCol.Nullable && haveCol.Default == wantCol.Default && haveCol.Type == wantCol.Type {
 				continue
 			}
-			if haveCol.Nullable && !wantCol.Nullable && wantCol.Default == "" {
+			if haveCol.Nullable && !wantCol.Nullable {
+				// Unlike ADD COLUMN, ALTER COLUMN ... SET NOT NULL does not backfill
+				// existing rows from a DEFAULT; it only validates and fails on existing
+				// NULLs. So a DEFAULT does not make narrowing an existing column safe.
 				disallowed = append(disallowed, DestructiveChange{
-					Kind:   "alter_column_not_null_no_default",
+					Kind:   "alter_column_not_null_no_backfill",
 					Schema: want.Schema,
 					Table:  want.Name,
 					Column: wantCol.Name,
@@ -425,7 +427,7 @@ func Diff(
 				Kind:   KindAlterColumn,
 				Schema: want.Schema,
 				Table:  want.Name,
-				Detail: &AlterColumnDetail{ColumnName: wantCol.Name, OldColumn: &oldCol, NewColumn: &newCol},
+				Detail: &AlterColumnDetail{OldColumn: &oldCol, NewColumn: &newCol},
 			})
 		}
 

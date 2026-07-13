@@ -70,7 +70,6 @@ fn alter_column_migration(old: Column, new: Column) -> Migration {
         schema: "public".into(),
         table: "things".into(),
         detail: MigrationDetail::AlterColumn {
-            column_name: new.name.clone(),
             old_column: old,
             new_column: new,
         },

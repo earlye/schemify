@@ -838,7 +838,9 @@ func TestDiff_DropSchema_PublicNotDestructive(t *testing.T) {
 	}
 }
 
-func TestDiff_AlterColumn_NullableTightens_WithDefault_Additive(t *testing.T) {
+func TestDiff_AlterColumn_NullableTightens_WithDefault_StillDisallowed(t *testing.T) {
+	// A DEFAULT does not make narrowing an existing column safe: unlike ADD COLUMN,
+	// ALTER COLUMN ... SET NOT NULL does not backfill existing rows.
 	desired := map[string]*schema.Table{
 		"public.a": {
 			Schema:  "public",
@@ -854,15 +856,11 @@ func TestDiff_AlterColumn_NullableTightens_WithDefault_Additive(t *testing.T) {
 		},
 	}
 	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
-	if len(dest) != 0 {
-		t.Fatalf("expected no destructive, got %v", dest)
+	if len(add) != 0 {
+		t.Errorf("expected no additive, got %v", add)
 	}
-	if len(add) != 1 || add[0].Kind != KindAlterColumn {
-		t.Fatalf("expected 1 alter_column, got %v", add)
-	}
-	d, ok := add[0].Detail.(*AlterColumnDetail)
-	if !ok || d.ColumnName != "status" || d.OldColumn.Nullable != true || d.NewColumn.Nullable != false {
-		t.Errorf("add[0]: %+v", add[0])
+	if len(dest) != 1 || dest[0].Kind != "alter_column_not_null_no_backfill" || dest[0].Column != "status" {
+		t.Fatalf("dest[0]: %+v", dest)
 	}
 }
 
@@ -963,19 +961,22 @@ func TestDiff_AlterColumn_TypeChanges_Additive(t *testing.T) {
 	}
 }
 
-func TestDiff_AlterColumn_Combination_NullableDefaultAndType(t *testing.T) {
+func TestDiff_AlterColumn_Combination_NullableLoosensDefaultAndType(t *testing.T) {
+	// Loosening nullable is always safe, so combining it with default/type changes
+	// on the same column should still be additive (unlike narrowing, which is
+	// disallowed regardless of what else changes; see the NoDefault_WithOtherDrift test).
 	desired := map[string]*schema.Table{
 		"public.a": {
 			Schema:  "public",
 			Name:    "a",
-			Columns: []schema.Column{{Name: "status", Type: "character varying(50)", Nullable: false, Default: "'init'"}},
+			Columns: []schema.Column{{Name: "status", Type: "character varying(50)", Nullable: true, Default: "'init'"}},
 		},
 	}
 	actual := map[string]*schema.Table{
 		"public.a": {
 			Schema:  "public",
 			Name:    "a",
-			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true}},
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: false}},
 		},
 	}
 	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
@@ -986,7 +987,7 @@ func TestDiff_AlterColumn_Combination_NullableDefaultAndType(t *testing.T) {
 		t.Fatalf("expected 1 alter_column, got %v", add)
 	}
 	d, ok := add[0].Detail.(*AlterColumnDetail)
-	if !ok || d.NewColumn.Type != "character varying(50)" || d.NewColumn.Default != "'init'" || d.NewColumn.Nullable != false {
+	if !ok || d.NewColumn.Type != "character varying(50)" || d.NewColumn.Default != "'init'" || d.NewColumn.Nullable != true {
 		t.Errorf("add[0]: %+v", add[0])
 	}
 }
@@ -1010,7 +1011,34 @@ func TestDiff_AlterColumn_NullableTightens_NoDefault_Disallowed(t *testing.T) {
 	if len(add) != 0 {
 		t.Errorf("expected no additive, got %v", add)
 	}
-	if len(dest) != 1 || dest[0].Kind != "alter_column_not_null_no_default" || dest[0].Column != "status" {
+	if len(dest) != 1 || dest[0].Kind != "alter_column_not_null_no_backfill" || dest[0].Column != "status" {
+		t.Fatalf("dest[0]: %+v", dest)
+	}
+}
+
+func TestDiff_AlterColumn_NullableTightens_NoDefault_WithOtherDrift_StillFullyDisallowed(t *testing.T) {
+	// A simultaneous type change must not leak an alter_column migration alongside
+	// the destructive report: the whole column change is rejected, not just the
+	// nullable narrowing.
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "character varying(50)", Nullable: false}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true}},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(add) != 0 {
+		t.Errorf("expected no additive, got %v", add)
+	}
+	if len(dest) != 1 || dest[0].Kind != "alter_column_not_null_no_backfill" || dest[0].Column != "status" {
 		t.Fatalf("dest[0]: %+v", dest)
 	}
 }

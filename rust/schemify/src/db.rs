@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::helpers::{predicted_foreign_key_constraint_name, predicted_unique_constraint_name};
 use crate::schema::{
     self, Column, ForeignKey, Index, PrimaryKeyConstraint, Table, UniqueConstraint,
-    normalize_info_schema_type,
+    normalize_info_schema_default, normalize_info_schema_type,
 };
 use std::collections::HashMap;
 use tokio_postgres::{Client, NoTls};
@@ -274,7 +274,7 @@ async fn list_columns(client: &Client, schema_name: &str, table_name: &str) -> R
             name,
             type_: normalize_info_schema_type(&pg_type),
             nullable: is_nullable == "YES",
-            default: def.unwrap_or_default(),
+            default: normalize_info_schema_default(&def.unwrap_or_default()),
         });
     }
     Ok(cols)

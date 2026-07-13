@@ -359,7 +359,9 @@ fn diff_empty_unique_constraint_names_panic() {
 }
 
 #[test]
-fn diff_alter_column_nullable_tightens_with_default_additive() {
+fn diff_alter_column_nullable_tightens_with_default_still_disallowed() {
+    // A DEFAULT does not make narrowing an existing column safe: unlike ADD COLUMN,
+    // ALTER COLUMN ... SET NOT NULL does not backfill existing rows.
     let mut desired = HashMap::new();
     desired.insert(
         "public.a".into(),
@@ -386,20 +388,10 @@ fn diff_alter_column_nullable_tightens_with_default_additive() {
         },
     );
     let (add, dest) = diff(desired, actual, None, None, None);
-    assert!(dest.is_empty());
-    assert_eq!(add.len(), 1);
-    assert_eq!(add[0].kind, schemify::diff::KIND_ALTER_COLUMN);
-    let MigrationDetail::AlterColumn {
-        column_name,
-        old_column,
-        new_column,
-    } = &add[0].detail
-    else {
-        panic!("expected AlterColumn");
-    };
-    assert_eq!(column_name, "status");
-    assert!(old_column.nullable);
-    assert!(!new_column.nullable);
+    assert!(add.is_empty());
+    assert_eq!(dest.len(), 1);
+    assert_eq!(dest[0].kind, "alter_column_not_null_no_backfill");
+    assert_eq!(dest[0].column, "status");
 }
 
 #[test]
@@ -541,7 +533,10 @@ fn diff_alter_column_type_changes_additive() {
 }
 
 #[test]
-fn diff_alter_column_combination_nullable_default_and_type() {
+fn diff_alter_column_combination_nullable_loosens_default_and_type() {
+    // Loosening nullable is always safe, so combining it with default/type changes
+    // on the same column should still be additive (unlike narrowing, which is
+    // disallowed regardless of what else changes).
     let mut desired = HashMap::new();
     desired.insert(
         "public.a".into(),
@@ -551,7 +546,7 @@ fn diff_alter_column_combination_nullable_default_and_type() {
             columns: vec![Column {
                 name: "status".into(),
                 type_: "character varying(50)".into(),
-                nullable: false,
+                nullable: true,
                 default: "'init'".into(),
             }],
             ..empty_table()
@@ -563,7 +558,12 @@ fn diff_alter_column_combination_nullable_default_and_type() {
         Table {
             schema: "public".into(),
             name: "a".into(),
-            columns: vec![col("status", "text")],
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: false,
+                default: String::new(),
+            }],
             ..empty_table()
         },
     );
@@ -576,7 +576,7 @@ fn diff_alter_column_combination_nullable_default_and_type() {
     };
     assert_eq!(new_column.type_, "character varying(50)");
     assert_eq!(new_column.default, "'init'");
-    assert!(!new_column.nullable);
+    assert!(new_column.nullable);
 }
 
 #[test]
@@ -609,7 +609,44 @@ fn diff_alter_column_nullable_tightens_no_default_disallowed() {
     let (add, dest) = diff(desired, actual, None, None, None);
     assert!(add.is_empty());
     assert_eq!(dest.len(), 1);
-    assert_eq!(dest[0].kind, "alter_column_not_null_no_default");
+    assert_eq!(dest[0].kind, "alter_column_not_null_no_backfill");
+    assert_eq!(dest[0].column, "status");
+}
+
+#[test]
+fn diff_alter_column_nullable_tightens_no_default_with_other_drift_still_fully_disallowed() {
+    // A simultaneous type change must not leak an alter_column migration alongside
+    // the destructive report: the whole column change is rejected, not just the
+    // nullable narrowing.
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "character varying(50)".into(),
+                nullable: false,
+                default: String::new(),
+            }],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![col("status", "text")],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(add.is_empty());
+    assert_eq!(dest.len(), 1);
+    assert_eq!(dest[0].kind, "alter_column_not_null_no_backfill");
     assert_eq!(dest[0].column, "status");
 }
 

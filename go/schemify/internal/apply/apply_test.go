@@ -126,9 +126,8 @@ func TestMigrationSQL_AlterColumn_Dispatch(t *testing.T) {
 		Schema: "public",
 		Table:  "things",
 		Detail: &diff.AlterColumnDetail{
-			ColumnName: "status",
-			OldColumn:  &schema.Column{Name: "status", Type: "text", Nullable: true},
-			NewColumn:  &schema.Column{Name: "status", Type: "text", Nullable: false},
+			OldColumn: &schema.Column{Name: "status", Type: "text", Nullable: true},
+			NewColumn: &schema.Column{Name: "status", Type: "text", Nullable: false},
 		},
 	}
 	sql, err := migrationSQL(m)
