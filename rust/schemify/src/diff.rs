@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 pub const KIND_CREATE_SCHEMA: &str = "create_schema";
 pub const KIND_CREATE_TABLE: &str = "create_table";
 pub const KIND_ADD_COLUMN: &str = "add_column";
+pub const KIND_ALTER_COLUMN: &str = "alter_column";
 pub const KIND_DROP_COLUMN: &str = "drop_column";
 pub const KIND_DROP_TABLE: &str = "drop_table";
 pub const KIND_CREATE_INDEX: &str = "create_index";
@@ -25,6 +26,10 @@ pub enum MigrationDetail {
     CreateSchema,
     CreateTable { table_def: Table },
     AddColumn { column: schema::Column },
+    AlterColumn {
+        old_column: schema::Column,
+        new_column: schema::Column, // new_column.name is the column name
+    },
     DropColumn { column_name: String },
     DropTable,
     CreateIndex { index: Index },
@@ -82,6 +87,10 @@ impl DestructiveChange {
             "drop_schema" => format!("schema {} would be dropped", self.schema),
             "add_column_not_null_no_default" => format!(
                 "column {}.{}.{} is NOT NULL with no DEFAULT and cannot be added to an existing table; add a DEFAULT or split this into add-nullable, backfill, and SET NOT NULL steps",
+                self.schema, self.table, self.column
+            ),
+            "alter_column_not_null_no_backfill" => format!(
+                "column {}.{}.{} would be narrowed to NOT NULL; schemify does not backfill existing rows, so existing NULLs would fail the constraint. Backfill existing rows and apply the NOT NULL change out-of-band, then re-run schemify",
                 self.schema, self.table, self.column
             ),
             "primary_key_mismatch" => {
@@ -420,6 +429,48 @@ pub fn diff_tables_and_indexes(
             }
         }
 
+        // Columns present in both -> alter if nullable, default, or type drifted.
+        let have_col_by_name: HashMap<&str, &schema::Column> = have
+            .columns
+            .iter()
+            .map(|c| (c.name.as_str(), c))
+            .collect();
+        for want_col in &want.columns {
+            let Some(have_col) = have_col_by_name.get(want_col.name.as_str()) else {
+                continue; // handled by the add-column loop above
+            };
+            if have_col.nullable == want_col.nullable
+                && have_col.default == want_col.default
+                && have_col.type_ == want_col.type_
+            {
+                continue;
+            }
+            if have_col.nullable && !want_col.nullable {
+                // Unlike ADD COLUMN, ALTER COLUMN ... SET NOT NULL does not backfill
+                // existing rows from a DEFAULT; it only validates and fails on existing
+                // NULLs. So a DEFAULT does not make narrowing an existing column safe.
+                disallowed.push(DestructiveChange {
+                    kind: "alter_column_not_null_no_backfill".into(),
+                    schema: want.schema.clone(),
+                    table: want.name.clone(),
+                    column: want_col.name.clone(),
+                    index: String::new(),
+                    name: String::new(),
+                    detail: String::new(),
+                });
+                continue;
+            }
+            migrations.push(Migration {
+                kind: KIND_ALTER_COLUMN,
+                schema: want.schema.clone(),
+                table: want.name.clone(),
+                detail: MigrationDetail::AlterColumn {
+                    old_column: (*have_col).clone(),
+                    new_column: want_col.clone(),
+                },
+            });
+        }
+
         match (&have.primary_key, &want.primary_key) {
             (None, Some(pk)) => {
                 migrations.push(Migration {
@@ -618,16 +669,17 @@ fn migration_kind_rank(kind: &str) -> i32 {
         KIND_CREATE_SCHEMA => 0,
         KIND_CREATE_TABLE => 1,
         KIND_ADD_COLUMN => 2,
-        KIND_ADD_PK => 3,
-        KIND_ADD_UNIQUE => 4,
-        KIND_ADD_FK => 5,
-        KIND_CREATE_INDEX => 6,
-        KIND_DROP_COLUMN => 7,
-        KIND_DROP_TABLE => 8,
-        KIND_DROP_UNIQUE => 9,
-        KIND_DROP_FK => 10,
-        KIND_DROP_INDEX => 11,
-        _ => 12,
+        KIND_ALTER_COLUMN => 3,
+        KIND_ADD_PK => 4,
+        KIND_ADD_UNIQUE => 5,
+        KIND_ADD_FK => 6,
+        KIND_CREATE_INDEX => 7,
+        KIND_DROP_COLUMN => 8,
+        KIND_DROP_TABLE => 9,
+        KIND_DROP_UNIQUE => 10,
+        KIND_DROP_FK => 11,
+        KIND_DROP_INDEX => 12,
+        _ => 13,
     }
 }
 

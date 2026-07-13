@@ -91,6 +91,7 @@ const (
 	KindCreateSchema = "create_schema"
 	KindCreateTable  = "create_table"
 	KindAddColumn    = "add_column"
+	KindAlterColumn  = "alter_column"
 	KindDropColumn   = "drop_column"
 	KindDropTable    = "drop_table"
 	KindCreateIndex  = "create_index"
@@ -106,6 +107,10 @@ const (
 type CreateSchemaDetail struct{}
 type CreateTableDetail struct{ TableDef *schema.Table }
 type AddColumnDetail struct{ Column *schema.Column }
+type AlterColumnDetail struct {
+	OldColumn *schema.Column // current DB state
+	NewColumn *schema.Column // desired state; NewColumn.Name is the column name
+}
 type DropColumnDetail struct{ ColumnName string }
 type DropTableDetail struct{}
 type CreateIndexDetail struct{ Index *schema.Index }
@@ -119,6 +124,7 @@ type DropIndexDetail struct{ Index *schema.Index }
 func (*CreateSchemaDetail) migrationDetail() {}
 func (*CreateTableDetail) migrationDetail()  {}
 func (*AddColumnDetail) migrationDetail()    {}
+func (*AlterColumnDetail) migrationDetail()  {}
 func (*DropColumnDetail) migrationDetail()   {}
 func (*DropTableDetail) migrationDetail()    {}
 func (*CreateIndexDetail) migrationDetail()  {}
@@ -174,6 +180,8 @@ func (d DestructiveChange) String() string {
 		return fmt.Sprintf("schema %s would be dropped", d.Schema)
 	case "add_column_not_null_no_default":
 		return fmt.Sprintf("column %s.%s.%s is NOT NULL with no DEFAULT and cannot be added to an existing table; add a DEFAULT or split this into add-nullable, backfill, and SET NOT NULL steps", d.Schema, d.Table, d.Column)
+	case "alter_column_not_null_no_backfill":
+		return fmt.Sprintf("column %s.%s.%s would be narrowed to NOT NULL; schemify does not backfill existing rows, so existing NULLs would fail the constraint. Backfill existing rows and apply the NOT NULL change out-of-band, then re-run schemify", d.Schema, d.Table, d.Column)
 	default:
 		return fmt.Sprintf("%s %s.%s would be dropped", d.Kind, d.Schema, d.Table)
 	}
@@ -388,6 +396,41 @@ func Diff(
 			}
 		}
 
+		// Columns present in both -> alter if nullable, default, or type drifted.
+		haveColByName := make(map[string]*schema.Column, len(have.Columns))
+		for i := range have.Columns {
+			haveColByName[have.Columns[i].Name] = &have.Columns[i]
+		}
+		for i := range want.Columns {
+			wantCol := &want.Columns[i]
+			haveCol, ok := haveColByName[wantCol.Name]
+			if !ok {
+				continue // handled by the add-column loop above
+			}
+			if haveCol.Nullable == wantCol.Nullable && haveCol.Default == wantCol.Default && haveCol.Type == wantCol.Type {
+				continue
+			}
+			if haveCol.Nullable && !wantCol.Nullable {
+				// Unlike ADD COLUMN, ALTER COLUMN ... SET NOT NULL does not backfill
+				// existing rows from a DEFAULT; it only validates and fails on existing
+				// NULLs. So a DEFAULT does not make narrowing an existing column safe.
+				disallowed = append(disallowed, DestructiveChange{
+					Kind:   "alter_column_not_null_no_backfill",
+					Schema: want.Schema,
+					Table:  want.Name,
+					Column: wantCol.Name,
+				})
+				continue
+			}
+			oldCol, newCol := *haveCol, *wantCol
+			migrations = append(migrations, Migration{
+				Kind:   KindAlterColumn,
+				Schema: want.Schema,
+				Table:  want.Name,
+				Detail: &AlterColumnDetail{OldColumn: &oldCol, NewColumn: &newCol},
+			})
+		}
+
 		// Primary key: adding a PK when the DB has none is additive (ALTER ADD PRIMARY KEY).
 		// Dropping or changing an existing PK is destructive.
 		if have.PrimaryKey == nil && want.PrimaryKey != nil {
@@ -544,26 +587,28 @@ func migrationKindRank(kind string) int {
 		return 1
 	case KindAddColumn:
 		return 2
-	case KindAddPK:
+	case KindAlterColumn:
 		return 3
-	case KindAddUnique:
+	case KindAddPK:
 		return 4
-	case KindAddFK:
+	case KindAddUnique:
 		return 5
-	case KindCreateIndex:
+	case KindAddFK:
 		return 6
-	case KindDropUnique:
+	case KindCreateIndex:
 		return 7
-	case KindDropFK:
+	case KindDropUnique:
 		return 8
-	case KindDropIndex:
+	case KindDropFK:
 		return 9
-	case KindDropColumn:
+	case KindDropIndex:
 		return 10
-	case KindDropTable:
+	case KindDropColumn:
 		return 11
-	default:
+	case KindDropTable:
 		return 12
+	default:
+		return 13
 	}
 }
 

@@ -1,5 +1,8 @@
 //! Desired/introspected schema types.
 
+use regex::Regex;
+use std::sync::LazyLock;
+
 #[derive(Debug, Clone)]
 pub struct AllowDropColumn {
     pub name: String,
@@ -115,6 +118,20 @@ pub fn normalize_info_schema_type(t: &str) -> String {
             }
         }
     }
+}
+
+// Matches the trailing ::type annotation PostgreSQL adds to
+// information_schema.columns.column_default (e.g. "'init'::text",
+// "'init'::character varying"). The desired-side default parsed from SQL has
+// no such cast, so it must be stripped for the two to compare equal.
+static DEFAULT_TYPE_CAST_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"::"?[a-zA-Z_]\w*(?:\s+[a-zA-Z_]\w*)*"?(\([^)]*\))?(\[\])?$"#).expect("regex")
+});
+
+/// Strips PostgreSQL's added type-cast annotation from a column_default expression
+/// so it matches the desired schema's plain literal.
+pub fn normalize_info_schema_default(d: &str) -> String {
+    DEFAULT_TYPE_CAST_RE.replace(d.trim(), "").to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

@@ -67,6 +67,10 @@ pub fn migration_sql(m: &Migration) -> Result<String> {
         MigrationDetail::CreateSchema => Ok(create_schema_sql(&m.schema)),
         MigrationDetail::CreateTable { table_def } => Ok(create_table_sql(table_def)),
         MigrationDetail::AddColumn { column } => Ok(add_column_sql(&m.schema, &m.table, column)),
+        MigrationDetail::AlterColumn {
+            old_column,
+            new_column,
+        } => Ok(alter_column_sql(&m.schema, &m.table, old_column, new_column)),
         MigrationDetail::DropColumn { column_name } => {
             Ok(drop_column_sql(&m.schema, &m.table, column_name))
         }
@@ -242,6 +246,31 @@ fn add_column_sql(schema: &str, table: &str, c: &Column) -> String {
         table,
         column_def(c)
     )
+}
+
+fn alter_column_sql(schema: &str, table: &str, old: &Column, new: &Column) -> String {
+    let mut clauses = Vec::new();
+    if old.nullable != new.nullable {
+        if new.nullable {
+            clauses.push(format!("ALTER COLUMN {} DROP NOT NULL", new.name));
+        } else {
+            clauses.push(format!("ALTER COLUMN {} SET NOT NULL", new.name));
+        }
+    }
+    if old.default != new.default {
+        if new.default.is_empty() {
+            clauses.push(format!("ALTER COLUMN {} DROP DEFAULT", new.name));
+        } else {
+            clauses.push(format!(
+                "ALTER COLUMN {} SET DEFAULT {}",
+                new.name, new.default
+            ));
+        }
+    }
+    if old.type_ != new.type_ {
+        clauses.push(format!("ALTER COLUMN {} TYPE {}", new.name, new.type_));
+    }
+    format!("ALTER TABLE {}.{} {}", schema, table, clauses.join(", "))
 }
 
 fn drop_column_sql(schema: &str, table: &str, column_name: &str) -> String {

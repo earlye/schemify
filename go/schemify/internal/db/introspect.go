@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/earlye/schemify/go/schemify/internal/helpers"
@@ -170,7 +171,7 @@ func listColumns(ctx context.Context, pool *pgxpool.Pool, schemaName, tableName 
 			Name:     name,
 			Type:     normalizeInfoSchemaType(pgType),
 			Nullable: isNullable == "YES",
-			Default:  defaultVal,
+			Default:  normalizeInfoSchemaDefault(defaultVal),
 		})
 	}
 	return cols, rows.Err()
@@ -195,6 +196,18 @@ func normalizeInfoSchemaType(t string) string {
 		return "character" + typeLengthSuffix(t)
 	}
 	return t
+}
+
+// defaultTypeCastRE matches the trailing ::type annotation PostgreSQL adds to
+// information_schema.columns.column_default (e.g. "'init'::text",
+// "'init'::character varying"). The desired-side default parsed from SQL has
+// no such cast, so it must be stripped for the two to compare equal.
+var defaultTypeCastRE = regexp.MustCompile(`::"?[a-zA-Z_]\w*(?:\s+[a-zA-Z_]\w*)*"?(\([^)]*\))?(\[\])?$`)
+
+// normalizeInfoSchemaDefault strips PostgreSQL's added type-cast annotation from a
+// column_default expression so it matches the desired schema's plain literal.
+func normalizeInfoSchemaDefault(d string) string {
+	return defaultTypeCastRE.ReplaceAllString(strings.TrimSpace(d), "")
 }
 
 func typeLengthSuffix(t string) string {

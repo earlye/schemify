@@ -358,6 +358,423 @@ fn diff_empty_unique_constraint_names_panic() {
     assert!(result.is_err());
 }
 
+#[test]
+fn diff_alter_column_nullable_tightens_with_default_still_disallowed() {
+    // A DEFAULT does not make narrowing an existing column safe: unlike ADD COLUMN,
+    // ALTER COLUMN ... SET NOT NULL does not backfill existing rows.
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: false,
+                default: "'init'".into(),
+            }],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![col("status", "text")],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(add.is_empty());
+    assert_eq!(dest.len(), 1);
+    assert_eq!(dest[0].kind, "alter_column_not_null_no_backfill");
+    assert_eq!(dest[0].column, "status");
+}
+
+#[test]
+fn diff_alter_column_nullable_loosens_additive() {
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![col("status", "text")],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: false,
+                default: "'init'".into(),
+            }],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(dest.is_empty());
+    assert_eq!(add.len(), 1);
+    assert_eq!(add[0].kind, schemify::diff::KIND_ALTER_COLUMN);
+}
+
+#[test]
+fn diff_alter_column_default_changes_additive() {
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: true,
+                default: "'new'".into(),
+            }],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: true,
+                default: "'old'".into(),
+            }],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(dest.is_empty());
+    assert_eq!(add.len(), 1);
+    assert_eq!(add[0].kind, schemify::diff::KIND_ALTER_COLUMN);
+}
+
+#[test]
+fn diff_alter_column_default_removed_allowed() {
+    // Nullable unchanged; only the default is dropped. Not a narrowing case, so it must be additive.
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: false,
+                default: String::new(),
+            }],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: false,
+                default: "'old'".into(),
+            }],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(dest.is_empty());
+    assert_eq!(add.len(), 1);
+    assert_eq!(add[0].kind, schemify::diff::KIND_ALTER_COLUMN);
+}
+
+#[test]
+fn diff_alter_column_type_changes_additive() {
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![col("amount", "numeric(12,2)")],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![col("amount", "integer")],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(dest.is_empty());
+    assert_eq!(add.len(), 1);
+    assert_eq!(add[0].kind, schemify::diff::KIND_ALTER_COLUMN);
+}
+
+#[test]
+fn diff_alter_column_combination_nullable_loosens_default_and_type() {
+    // Loosening nullable is always safe, so combining it with default/type changes
+    // on the same column should still be additive (unlike narrowing, which is
+    // disallowed regardless of what else changes).
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "character varying(50)".into(),
+                nullable: true,
+                default: "'init'".into(),
+            }],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: false,
+                default: String::new(),
+            }],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(dest.is_empty());
+    assert_eq!(add.len(), 1);
+    assert_eq!(add[0].kind, schemify::diff::KIND_ALTER_COLUMN);
+    let MigrationDetail::AlterColumn { new_column, .. } = &add[0].detail else {
+        panic!("expected AlterColumn");
+    };
+    assert_eq!(new_column.type_, "character varying(50)");
+    assert_eq!(new_column.default, "'init'");
+    assert!(new_column.nullable);
+}
+
+#[test]
+fn diff_alter_column_nullable_tightens_no_default_disallowed() {
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: false,
+                default: String::new(),
+            }],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![col("status", "text")],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(add.is_empty());
+    assert_eq!(dest.len(), 1);
+    assert_eq!(dest[0].kind, "alter_column_not_null_no_backfill");
+    assert_eq!(dest[0].column, "status");
+}
+
+#[test]
+fn diff_alter_column_nullable_tightens_no_default_with_other_drift_still_fully_disallowed() {
+    // A simultaneous type change must not leak an alter_column migration alongside
+    // the destructive report: the whole column change is rejected, not just the
+    // nullable narrowing.
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "character varying(50)".into(),
+                nullable: false,
+                default: String::new(),
+            }],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![col("status", "text")],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(add.is_empty());
+    assert_eq!(dest.len(), 1);
+    assert_eq!(dest[0].kind, "alter_column_not_null_no_backfill");
+    assert_eq!(dest[0].column, "status");
+}
+
+#[test]
+fn diff_alter_column_no_change_no_migration() {
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: true,
+                default: "'x'".into(),
+            }],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "status".into(),
+                type_: "text".into(),
+                nullable: true,
+                default: "'x'".into(),
+            }],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(add.is_empty());
+    assert!(dest.is_empty());
+}
+
+#[test]
+fn diff_alter_column_multiple_columns_drifted() {
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![
+                Column {
+                    name: "status".into(),
+                    type_: "text".into(),
+                    nullable: true,
+                    default: "'new'".into(),
+                },
+                col("amount", "numeric"),
+            ],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![
+                Column {
+                    name: "status".into(),
+                    type_: "text".into(),
+                    nullable: true,
+                    default: "'old'".into(),
+                },
+                col("amount", "integer"),
+            ],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(dest.is_empty());
+    assert_eq!(add.len(), 2);
+    for m in &add {
+        assert_eq!(m.kind, schemify::diff::KIND_ALTER_COLUMN);
+    }
+}
+
+#[test]
+fn diff_alter_column_sorted_after_add_column() {
+    let mut desired = HashMap::new();
+    desired.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![
+                Column {
+                    name: "existing".into(),
+                    type_: "text".into(),
+                    nullable: true,
+                    default: "'new'".into(),
+                },
+                col("brand_new", "text"),
+            ],
+            ..empty_table()
+        },
+    );
+    let mut actual = HashMap::new();
+    actual.insert(
+        "public.a".into(),
+        Table {
+            schema: "public".into(),
+            name: "a".into(),
+            columns: vec![Column {
+                name: "existing".into(),
+                type_: "text".into(),
+                nullable: true,
+                default: "'old'".into(),
+            }],
+            ..empty_table()
+        },
+    );
+    let (add, dest) = diff(desired, actual, None, None, None);
+    assert!(dest.is_empty());
+    assert_eq!(add.len(), 2);
+    assert_eq!(add[0].kind, KIND_ADD_COLUMN);
+    assert_eq!(add[1].kind, schemify::diff::KIND_ALTER_COLUMN);
+}
+
 fn empty_table() -> Table {
     Table {
         schema: String::new(),
