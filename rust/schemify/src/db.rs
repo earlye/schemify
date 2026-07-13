@@ -248,7 +248,7 @@ async fn list_tables(client: &Client, schema_name: &str) -> Result<Vec<String>> 
 async fn list_columns(client: &Client, schema_name: &str, table_name: &str) -> Result<Vec<Column>> {
     let rows = client
         .query(
-            "SELECT column_name, column_default, data_type, character_maximum_length
+            "SELECT column_name, column_default, data_type, character_maximum_length, is_nullable
              FROM information_schema.columns
              WHERE table_schema = $1 AND table_name = $2
              ORDER BY ordinal_position",
@@ -263,6 +263,7 @@ async fn list_columns(client: &Client, schema_name: &str, table_name: &str) -> R
         let def: Option<String> = row.get(1);
         let data_type: String = row.get(2);
         let max_len: Option<i32> = row.get(3);
+        let is_nullable: String = row.get(4);
         let mut pg_type = data_type.clone();
         if let Some(n) = max_len {
             if n > 0 {
@@ -272,7 +273,7 @@ async fn list_columns(client: &Client, schema_name: &str, table_name: &str) -> R
         cols.push(Column {
             name,
             type_: normalize_info_schema_type(&pg_type),
-            nullable: true,
+            nullable: is_nullable == "YES",
             default: def.unwrap_or_default(),
         });
     }

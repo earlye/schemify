@@ -561,6 +561,30 @@ func TestIntegration_AddColumn_NotNullDefault(t *testing.T) {
 		t.Errorf("expected column_default to reference 'init', got %s", columnDefault)
 	}
 
+	actual, err := schemify.Introspect(ctx, pool, "public")
+	if err != nil {
+		t.Fatalf("Introspect: %v", err)
+	}
+	tbl, ok := actual.Tables["public.schemify_itest_nnd_things"]
+	if !ok {
+		t.Fatalf("expected introspected table public.schemify_itest_nnd_things, got %v", actual.Tables)
+	}
+	var statusCol *schema.Column
+	for i := range tbl.Columns {
+		if tbl.Columns[i].Name == "status" {
+			statusCol = &tbl.Columns[i]
+		}
+	}
+	if statusCol == nil {
+		t.Fatalf("expected introspected status column, got %v", tbl.Columns)
+	}
+	if statusCol.Nullable {
+		t.Errorf("expected introspected status column to be Nullable=false, got true")
+	}
+	if !strings.Contains(statusCol.Default, "init") {
+		t.Errorf("expected introspected status column Default to reference 'init', got %q", statusCol.Default)
+	}
+
 	rows, err := pool.Query(ctx, "SELECT status FROM public.schemify_itest_nnd_things ORDER BY id")
 	if err != nil {
 		t.Fatalf("query rows: %v", err)
