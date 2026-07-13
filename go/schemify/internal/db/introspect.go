@@ -140,7 +140,7 @@ func listTables(ctx context.Context, pool *pgxpool.Pool, schemaName string) ([]s
 
 func listColumns(ctx context.Context, pool *pgxpool.Pool, schemaName, tableName string) ([]schema.Column, error) {
 	rows, err := pool.Query(ctx,
-		`SELECT column_name, column_default, data_type, character_maximum_length
+		`SELECT column_name, column_default, data_type, character_maximum_length, is_nullable
 		 FROM information_schema.columns
 		 WHERE table_schema = $1 AND table_name = $2
 		 ORDER BY ordinal_position`,
@@ -152,10 +152,10 @@ func listColumns(ctx context.Context, pool *pgxpool.Pool, schemaName, tableName 
 
 	var cols []schema.Column
 	for rows.Next() {
-		var name, dataType string
+		var name, dataType, isNullable string
 		var def *string
 		var maxLen *int32
-		if err := rows.Scan(&name, &def, &dataType, &maxLen); err != nil {
+		if err := rows.Scan(&name, &def, &dataType, &maxLen, &isNullable); err != nil {
 			return nil, err
 		}
 		defaultVal := ""
@@ -169,7 +169,7 @@ func listColumns(ctx context.Context, pool *pgxpool.Pool, schemaName, tableName 
 		cols = append(cols, schema.Column{
 			Name:     name,
 			Type:     normalizeInfoSchemaType(pgType),
-			Nullable: true, // we don't read is_nullable for now; can add
+			Nullable: isNullable == "YES",
 			Default:  defaultVal,
 		})
 	}

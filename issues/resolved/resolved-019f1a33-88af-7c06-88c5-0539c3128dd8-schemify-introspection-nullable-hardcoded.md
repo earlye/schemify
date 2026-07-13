@@ -34,7 +34,19 @@ value for anything. But it means:
    `Column.Nullable` from it instead of hardcoding `true`.
 2. Rust: add `is_nullable` to the `SELECT` in `db.rs` and populate `Column.nullable` from
    it instead of hardcoding `true`.
-3. Decide whether to add an "alter column" migration kind (type/nullable/default drift
-   on existing columns) in both languages, or explicitly scope that out for now. This is
-   a design decision, not a mechanical fix — raise it with the maintainer before
-   implementing.
+
+The "alter column" migration kind (type/nullable/default drift on existing columns) has
+been split out into its own issue:
+`issue-019f5453-0de0-7dc0-901e-05a77b566446-alter-column-migration-kind.md`. This issue
+is now scoped to just the introspection fix (items 1-2) above.
+
+## Grill Log
+
+### 2026-07-11
+
+- Q: Should this issue also add an "alter column" migration kind, or scope that out and
+  only implement the introspection fix now? — A: Split it out into its own issue; this
+  issue is now scoped to introspection only.
+- Q: Should the alter-column follow-up be tracked as a new issue file now, or dropped
+  until it comes up again? — A: Create it now, in this branch, via `md-issue-track`. See
+  `issue-019f5453-0de0-7dc0-901e-05a77b566446-alter-column-migration-kind.md`.

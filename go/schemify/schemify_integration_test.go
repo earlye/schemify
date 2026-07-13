@@ -492,11 +492,14 @@ CREATE TABLE public.schemify_itest_nnd_things (
 );
 `
 
-// itestNotNullDefaultAddedSQL adds a NOT NULL column with a DEFAULT.
+// itestNotNullDefaultAddedSQL adds a NOT NULL column with a DEFAULT, plus a
+// plain nullable column with no DEFAULT to verify introspection reports
+// Nullable=true for it (not just Nullable=false for the NOT NULL column).
 const itestNotNullDefaultAddedSQL = `
 CREATE TABLE public.schemify_itest_nnd_things (
     id text NOT NULL,
     status text NOT NULL DEFAULT 'init',
+    note text,
     PRIMARY KEY (id)
 );
 `
@@ -559,6 +562,42 @@ func TestIntegration_AddColumn_NotNullDefault(t *testing.T) {
 	}
 	if !strings.Contains(columnDefault, "init") {
 		t.Errorf("expected column_default to reference 'init', got %s", columnDefault)
+	}
+
+	actual, err := schemify.Introspect(ctx, pool, "public")
+	if err != nil {
+		t.Fatalf("Introspect: %v", err)
+	}
+	tbl, ok := actual.Tables["public.schemify_itest_nnd_things"]
+	if !ok {
+		t.Fatalf("expected introspected table public.schemify_itest_nnd_things, got %v", actual.Tables)
+	}
+	var statusCol *schema.Column
+	for i := range tbl.Columns {
+		if tbl.Columns[i].Name == "status" {
+			statusCol = &tbl.Columns[i]
+		}
+	}
+	if statusCol == nil {
+		t.Fatalf("expected introspected status column, got %v", tbl.Columns)
+	}
+	if statusCol.Nullable {
+		t.Errorf("expected introspected status column to be Nullable=false, got true")
+	}
+	if !strings.Contains(statusCol.Default, "init") {
+		t.Errorf("expected introspected status column Default to reference 'init', got %q", statusCol.Default)
+	}
+	var noteCol *schema.Column
+	for i := range tbl.Columns {
+		if tbl.Columns[i].Name == "note" {
+			noteCol = &tbl.Columns[i]
+		}
+	}
+	if noteCol == nil {
+		t.Fatalf("expected introspected note column, got %v", tbl.Columns)
+	}
+	if !noteCol.Nullable {
+		t.Errorf("expected introspected note column to be Nullable=true, got false")
 	}
 
 	rows, err := pool.Query(ctx, "SELECT status FROM public.schemify_itest_nnd_things ORDER BY id")

@@ -94,11 +94,14 @@ CREATE TABLE public.schemify_itest_nnd_things (
 );
 "#;
 
-/// Adds a NOT NULL column with a DEFAULT.
+/// Adds a NOT NULL column with a DEFAULT, plus a plain nullable column with no
+/// DEFAULT to verify introspection reports nullable=true for it (not just
+/// nullable=false for the NOT NULL column).
 const ITEST_NND_ADDED_SQL: &str = r#"
 CREATE TABLE public.schemify_itest_nnd_things (
     id text NOT NULL,
     status text NOT NULL DEFAULT 'init',
+    note text,
     PRIMARY KEY (id)
 );
 "#;
@@ -377,6 +380,35 @@ async fn integration_add_column_not_null_default() {
     assert!(
         column_default.contains("init"),
         "expected column_default to reference 'init', got {column_default}"
+    );
+
+    let actual = introspect(&client, "public").await.expect("Introspect");
+    let tbl = actual
+        .tables
+        .get("public.schemify_itest_nnd_things")
+        .expect("expected introspected table public.schemify_itest_nnd_things");
+    let status_col = tbl
+        .columns
+        .iter()
+        .find(|c| c.name == "status")
+        .expect("expected introspected status column");
+    assert!(
+        !status_col.nullable,
+        "expected introspected status column to be nullable=false, got true"
+    );
+    assert!(
+        status_col.default.contains("init"),
+        "expected introspected status column default to reference 'init', got {}",
+        status_col.default
+    );
+    let note_col = tbl
+        .columns
+        .iter()
+        .find(|c| c.name == "note")
+        .expect("expected introspected note column");
+    assert!(
+        note_col.nullable,
+        "expected introspected note column to be nullable=true, got false"
     );
 
     let rows = client
