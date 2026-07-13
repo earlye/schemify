@@ -837,3 +837,268 @@ func TestDiff_DropSchema_PublicNotDestructive(t *testing.T) {
 		}
 	}
 }
+
+func TestDiff_AlterColumn_NullableTightens_WithDefault_Additive(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: false, Default: "'init'"}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true}},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive, got %v", dest)
+	}
+	if len(add) != 1 || add[0].Kind != KindAlterColumn {
+		t.Fatalf("expected 1 alter_column, got %v", add)
+	}
+	d, ok := add[0].Detail.(*AlterColumnDetail)
+	if !ok || d.ColumnName != "status" || d.OldColumn.Nullable != true || d.NewColumn.Nullable != false {
+		t.Errorf("add[0]: %+v", add[0])
+	}
+}
+
+func TestDiff_AlterColumn_NullableLoosens_Additive(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: false, Default: "'init'"}},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive, got %v", dest)
+	}
+	if len(add) != 1 || add[0].Kind != KindAlterColumn {
+		t.Fatalf("expected 1 alter_column, got %v", add)
+	}
+}
+
+func TestDiff_AlterColumn_DefaultChanges_Additive(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true, Default: "'new'"}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true, Default: "'old'"}},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive, got %v", dest)
+	}
+	if len(add) != 1 || add[0].Kind != KindAlterColumn {
+		t.Fatalf("expected 1 alter_column, got %v", add)
+	}
+}
+
+func TestDiff_AlterColumn_DefaultRemoved_Allowed(t *testing.T) {
+	// Nullable unchanged; only the default is dropped. Not a narrowing case, so it must be additive.
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: false}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: false, Default: "'old'"}},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive, got %v", dest)
+	}
+	if len(add) != 1 || add[0].Kind != KindAlterColumn {
+		t.Fatalf("expected 1 alter_column, got %v", add)
+	}
+}
+
+func TestDiff_AlterColumn_TypeChanges_Additive(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "amount", Type: "numeric(12,2)", Nullable: true}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "amount", Type: "integer", Nullable: true}},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive, got %v", dest)
+	}
+	if len(add) != 1 || add[0].Kind != KindAlterColumn {
+		t.Fatalf("expected 1 alter_column, got %v", add)
+	}
+}
+
+func TestDiff_AlterColumn_Combination_NullableDefaultAndType(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "character varying(50)", Nullable: false, Default: "'init'"}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true}},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive, got %v", dest)
+	}
+	if len(add) != 1 || add[0].Kind != KindAlterColumn {
+		t.Fatalf("expected 1 alter_column, got %v", add)
+	}
+	d, ok := add[0].Detail.(*AlterColumnDetail)
+	if !ok || d.NewColumn.Type != "character varying(50)" || d.NewColumn.Default != "'init'" || d.NewColumn.Nullable != false {
+		t.Errorf("add[0]: %+v", add[0])
+	}
+}
+
+func TestDiff_AlterColumn_NullableTightens_NoDefault_Disallowed(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: false}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true}},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(add) != 0 {
+		t.Errorf("expected no additive, got %v", add)
+	}
+	if len(dest) != 1 || dest[0].Kind != "alter_column_not_null_no_default" || dest[0].Column != "status" {
+		t.Fatalf("dest[0]: %+v", dest)
+	}
+}
+
+func TestDiff_AlterColumn_NoChange_NoMigration(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true, Default: "'x'"}},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema:  "public",
+			Name:    "a",
+			Columns: []schema.Column{{Name: "status", Type: "text", Nullable: true, Default: "'x'"}},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(add) != 0 || len(dest) != 0 {
+		t.Fatalf("expected no changes, got add=%v dest=%v", add, dest)
+	}
+}
+
+func TestDiff_AlterColumn_MultipleColumnsDrifted(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema: "public",
+			Name:   "a",
+			Columns: []schema.Column{
+				{Name: "status", Type: "text", Nullable: true, Default: "'new'"},
+				{Name: "amount", Type: "numeric", Nullable: true},
+			},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema: "public",
+			Name:   "a",
+			Columns: []schema.Column{
+				{Name: "status", Type: "text", Nullable: true, Default: "'old'"},
+				{Name: "amount", Type: "integer", Nullable: true},
+			},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive, got %v", dest)
+	}
+	if len(add) != 2 {
+		t.Fatalf("expected 2 alter_column migrations, got %d: %v", len(add), add)
+	}
+	for _, m := range add {
+		if m.Kind != KindAlterColumn {
+			t.Errorf("expected alter_column, got %+v", m)
+		}
+	}
+}
+
+func TestDiff_AlterColumn_SortedAfterAddColumn(t *testing.T) {
+	desired := map[string]*schema.Table{
+		"public.a": {
+			Schema: "public",
+			Name:   "a",
+			Columns: []schema.Column{
+				{Name: "existing", Type: "text", Nullable: true, Default: "'new'"},
+				{Name: "brand_new", Type: "text", Nullable: true},
+			},
+		},
+	}
+	actual := map[string]*schema.Table{
+		"public.a": {
+			Schema: "public",
+			Name:   "a",
+			Columns: []schema.Column{
+				{Name: "existing", Type: "text", Nullable: true, Default: "'old'"},
+			},
+		},
+	}
+	add, dest := Diff(publicNamespaces(), publicNamespaces(), desired, actual, nil, nil, nil, nil)
+	if len(dest) != 0 {
+		t.Fatalf("expected no destructive, got %v", dest)
+	}
+	if len(add) != 2 {
+		t.Fatalf("expected 2 migrations, got %d: %v", len(add), add)
+	}
+	if add[0].Kind != KindAddColumn || add[1].Kind != KindAlterColumn {
+		t.Errorf("expected add_column before alter_column, got %v", add)
+	}
+}

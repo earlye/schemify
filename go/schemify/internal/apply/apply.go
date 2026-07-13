@@ -86,6 +86,8 @@ func migrationSQL(m diff.Migration) (string, error) {
 		return createTableSQL(d.TableDef), nil
 	case *diff.AddColumnDetail:
 		return addColumnSQL(m.Schema, m.Table, d.Column), nil
+	case *diff.AlterColumnDetail:
+		return alterColumnSQL(m.Schema, m.Table, d.OldColumn, d.NewColumn), nil
 	case *diff.DropColumnDetail:
 		return dropColumnSQL(m.Schema, m.Table, d.ColumnName), nil
 	case *diff.DropTableDetail:
@@ -204,6 +206,28 @@ func addFKSQL(schemaName, tableName string, fk *schema.ForeignKey) string {
 
 func addColumnSQL(schema, table string, c *schema.Column) string {
 	return fmt.Sprintf("ALTER TABLE %s.%s ADD COLUMN %s", schema, table, columnDef(c))
+}
+
+func alterColumnSQL(schemaName, table string, old, new *schema.Column) string {
+	var clauses []string
+	if old.Nullable != new.Nullable {
+		if new.Nullable {
+			clauses = append(clauses, fmt.Sprintf("ALTER COLUMN %s DROP NOT NULL", new.Name))
+		} else {
+			clauses = append(clauses, fmt.Sprintf("ALTER COLUMN %s SET NOT NULL", new.Name))
+		}
+	}
+	if old.Default != new.Default {
+		if new.Default == "" {
+			clauses = append(clauses, fmt.Sprintf("ALTER COLUMN %s DROP DEFAULT", new.Name))
+		} else {
+			clauses = append(clauses, fmt.Sprintf("ALTER COLUMN %s SET DEFAULT %s", new.Name, new.Default))
+		}
+	}
+	if old.Type != new.Type {
+		clauses = append(clauses, fmt.Sprintf("ALTER COLUMN %s TYPE %s", new.Name, new.Type))
+	}
+	return fmt.Sprintf("ALTER TABLE %s.%s %s", schemaName, table, strings.Join(clauses, ", "))
 }
 
 func dropColumnSQL(schema, table, columnName string) string {
