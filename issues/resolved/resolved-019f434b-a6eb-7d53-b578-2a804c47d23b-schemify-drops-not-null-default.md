@@ -130,3 +130,46 @@ Hand off to schemify itself (not a `c3` fix) to determine whether:
 2. They're applied correctly on `CREATE TABLE` but only lost on `ADD COLUMN`
    (needs the fresh-empty-DB repro above to distinguish), and
 3. Why `schemify-plan`'s diff doesn't flag the resulting drift as pending.
+
+## Resolution (2026-07-11)
+
+This turned out to be a near-duplicate of
+`issues/resolved/resolved-019eac8a-1414-77f1-88e3-47d64a3a40b6-schemify-not-null-default-missing.md`,
+already fixed by commit `bd331c6` ("Fix missing NOT NULL/DEFAULT on added columns in Go
+and Rust (#9)") before this issue file was added. That commit fixed the shared
+`columnDef`/`column_def` rendering helper (Go and Rust) so both `CREATE TABLE` and
+`ADD COLUMN` emit `NOT NULL`/`DEFAULT`, and added a plan-time guard rejecting an unsafe
+bare-`NOT NULL`-no-`DEFAULT` add-column.
+
+**Verified live (Go, fresh Postgres via `go/docker-compose.yml`), no regression:**
+applied `CREATE TABLE public.widget (id UUID PRIMARY KEY, name TEXT NOT NULL)` from
+empty via `schemify -s ... -v`. Generated SQL was
+`CREATE TABLE public.widget (id uuid NOT NULL, name text NOT NULL, PRIMARY KEY (id))`,
+and `\d public.widget` confirmed `name` is `not null` in the live DB. This settles
+item 2 in "Next steps" above (either from parse-then-check the same as `state` in
+`tasks.task`, unaffected).
+
+**Compounding issue (item 3) confirmed real but not new:** manually dropped `NOT NULL`
+on the live `name` column to simulate pre-existing drift (as would happen from a
+pre-fix apply, or any other bypass of schemify), then re-ran `schemify -n` (dry-run)
+against the still-`NOT NULL` desired schema. It reported zero pending migrations —
+silently blind to the mismatch. Root cause is the same as
+`issue-019f1a33-88af-7c06-88c5-0539c3128dd8-schemify-introspection-nullable-hardcoded.md`:
+introspection hardcodes `Nullable: true` in both languages, and there's no
+alter-column migration kind, so the diff engine cannot see or fix a `NOT NULL`/
+`DEFAULT` mismatch on an existing column. No further action needed under *this*
+issue — tracked exclusively under `019f1a33` going forward.
+
+Closing this issue as resolved/duplicate.
+
+## Grill Log
+
+### 2026-07-11
+
+- Q: Is this issue superseded by the already-merged fix (`bd331c6`) and the still-open
+  `019f1a33`, or does it capture something neither does? — A: Keep it open pending an
+  explicit live re-verification of the `CREATE TABLE`-from-empty path (possible
+  regression concern), rather than assuming from git history alone.
+- Q: After verifying `CREATE TABLE` is fixed with no regression, and confirming the
+  drift-detection gap is real but is `019f1a33`'s root cause, how should this issue be
+  closed out? — A: Close as resolved/duplicate; move to `issues/resolved/`.
