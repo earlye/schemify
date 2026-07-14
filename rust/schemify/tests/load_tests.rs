@@ -237,6 +237,21 @@ fn parse_ddl_column_default_zero_arg_funccall() {
 }
 
 #[test]
+fn parse_ddl_column_default_funccall_pg_catalog_qualified() {
+    let sql = r#"CREATE TABLE example.thing (
+    created_at TIMESTAMPTZ NOT NULL DEFAULT pg_catalog.now()
+);"#;
+    let (tables, _, _) = parse_ddl(sql).unwrap();
+    assert_eq!(tables.len(), 1);
+    let created_at = tables[0]
+        .columns
+        .iter()
+        .find(|c| c.name == "created_at")
+        .expect("created_at column");
+    assert_eq!(created_at.default, "now()");
+}
+
+#[test]
 fn parse_ddl_column_default_funccall_with_args() {
     let sql = r#"CREATE TABLE example.thing (
     id integer PRIMARY KEY DEFAULT nextval('example_thing_id_seq'::regclass)
@@ -248,10 +263,7 @@ fn parse_ddl_column_default_funccall_with_args() {
         .iter()
         .find(|c| c.name == "id")
         .expect("id column");
-    assert_eq!(
-        id.default,
-        "nextval('example_thing_id_seq'::regclass)"
-    );
+    assert_eq!(id.default, "nextval('example_thing_id_seq'::regclass)");
 }
 
 #[test]
