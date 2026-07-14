@@ -449,6 +449,23 @@ fn deparse_expr_for_index(n: &Node) -> Result<String> {
                 .unwrap_or_default();
             Ok(format!("{l}{op}{r}"))
         }
+        PgNode::FuncCall(fc) => {
+            let mut name_parts = Vec::new();
+            for n in &fc.funcname {
+                if let Some(PgNode::String(s)) = &n.node {
+                    name_parts.push(s.sval.clone());
+                }
+            }
+            if name_parts.len() >= 2 && name_parts[0] == "pg_catalog" {
+                name_parts.remove(0);
+            }
+            let args = fc
+                .args
+                .iter()
+                .map(deparse_expr_for_index)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(format!("{}({})", name_parts.join("."), args.join(", ")))
+        }
         _ => Err(Error::ParseSql(format!(
             "unsupported index expression node (manual deparse)"
         ))),

@@ -221,6 +221,40 @@ fn load_from_dir_errors_on_parse_failure_in_any_file() {
 }
 
 #[test]
+fn parse_ddl_column_default_zero_arg_funccall() {
+    let sql = r#"CREATE TABLE example.thing (
+    id UUID PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);"#;
+    let (tables, _, _) = parse_ddl(sql).unwrap();
+    assert_eq!(tables.len(), 1);
+    let created_at = tables[0]
+        .columns
+        .iter()
+        .find(|c| c.name == "created_at")
+        .expect("created_at column");
+    assert_eq!(created_at.default, "now()");
+}
+
+#[test]
+fn parse_ddl_column_default_funccall_with_args() {
+    let sql = r#"CREATE TABLE example.thing (
+    id integer PRIMARY KEY DEFAULT nextval('example_thing_id_seq'::regclass)
+);"#;
+    let (tables, _, _) = parse_ddl(sql).unwrap();
+    assert_eq!(tables.len(), 1);
+    let id = tables[0]
+        .columns
+        .iter()
+        .find(|c| c.name == "id")
+        .expect("id column");
+    assert_eq!(
+        id.default,
+        "nextval('example_thing_id_seq'::regclass)"
+    );
+}
+
+#[test]
 fn load_allow_drop_defs_columns() {
     let dir = tempdir().unwrap();
     let mut f = fs::File::create(dir.path().join("events.sql")).unwrap();
